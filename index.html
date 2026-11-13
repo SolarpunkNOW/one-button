@@ -424,6 +424,16 @@
       <button id="c-add">Add contact</button>
     </div>
     <p class="note">Import pulls in whoever you pick from your phone (names, numbers, emails). Phone numbers cover WhatsApp, Signal and SMS; add a Telegram @handle by hand. Tap a channel tag to star someone's main one; it also learns from the channels you use.</p>
+    <div style="height:26px"></div>
+    <label class="set-h">My apps</label>
+    <div id="apps-list"></div>
+    <div class="addrow">
+      <input id="ap-name" class="full" placeholder="App name, e.g. SoundCloud" />
+      <select id="ap-job" aria-label="What it is for" style="min-height:44px"></select>
+      <input id="ap-url" placeholder="Link, e.g. soundcloud.com" inputmode="url" />
+      <button id="ap-add">Add app</button>
+    </div>
+    <p class="note">Say "play music" or "navigate to the market" and the app for that job opens. Put {q} in a link where the search words go, so "play some jazz" searches inside the app. Tap the job tag to star your usual app for it; it also learns from the ones you tap. Or just say "add Spotify to my apps for music".</p>
     <a class="upd" id="upd" href="https://github.com/jayfcousins-cell/one-button-android/releases/latest" style="display:none">check for app update</a>
   </div>
 </div>
@@ -673,11 +683,11 @@ async function ask(messages){
 function parseJSON(raw){ raw=raw.replace(/^```(json)?/i,'').replace(/```$/,'').trim();
   try{return JSON.parse(raw);}catch{return null;} }
 
-const SYS = `You are the brain of a one-button voice app. The user speaks ONE short utterance. Classify it as something they NOTICED (a note/todo to keep), an ACTION to take now (reach a person, or add a calendar event), or a QUESTION to answer.
+const SYS = `You are the brain of a one-button voice app. The user speaks ONE short utterance. Classify it as something they NOTICED (a note/todo to keep), an ACTION to take now (reach a person, or add a calendar event), an app to OPEN (music, maps, video, notes, a ride), or a QUESTION to answer.
 
 Return ONLY raw JSON, no markdown:
 {
- "kind":"capture"|"action"|"answer",
+ "kind":"capture"|"action"|"open"|"answer",
  "category":"fix"|"check"|"buy"|"do",
  "text":"cleaned one-line note",
  "due":"for a capture: ISO 8601 date-time if they gave a time or day, else empty",
@@ -689,9 +699,16 @@ Return ONLY raw JSON, no markdown:
  "title":"calendar title",
  "start":"ISO 8601 datetime or empty",
  "minutes":60,
+ "app":"for open: the app named, or empty",
+ "job":"for open: music|maps|video|notes|rides|other",
+ "query":"for open: what to look for inside the app (an artist, genre, song, place or destination), or empty",
+ "add":false,
+ "url":"for open with add true: the app's web address, with {q} where search words go if it has a search page",
  "answer":"spoken answer, 1-2 sentences"
 }
-Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. Use channel "auto" unless the user names one. Keep text tight. Today is ${new Date().toISOString()}.`;
+Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "play/put on some music", "play Nina Simone", "navigate/directions/take me to X", "open YouTube", "get me a ride home" -> open, with the artist, genre, song or place in query. "add Spotify to my apps for music" -> open with add true. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. Use channel "auto" unless the user names one. Keep text tight. Today is ${new Date().toISOString()}.`;
+// The user's apps, added to the brain's briefing each time so a new one is known straight away.
+const appsHint=()=>apps.length?`\nThe user's apps: ${apps.map(a=>a.name+' ('+a.job+')').join(', ')}. Put the name in "app" when one is said; otherwise leave it empty and set "job".`:'';
 
 // "Claude, ..." or "for Claude ..." goes to Claude on the laptop rather than onto the list.
 const FOR_CLAUDE=/^\s*(hey |ok |okay )?(claude|agent)\b[,:. ]*|^\s*(for|ask|tell) (claude|an agent|the agent)\b(\s+to\b)?[,:. ]*/i;
@@ -723,7 +740,7 @@ async function route(text){
     addAct('Open','go',()=>openNote(n.id));return;}}
   orb.classList.add('busy'); hint.style.display='none';
   try{
-    const out=parseJSON(await ask([{role:'system',content:SYS},{role:'user',content:text}])) || {kind:'answer',answer:'Sorry, did not get that.'};
+    const out=parseJSON(await ask([{role:'system',content:SYS+appsHint()},{role:'user',content:text}])) || {kind:'answer',answer:'Sorry, did not get that.'};
     handle(out,text);
   }catch(err){
     mainLive||(statusEl.textContent='tap to speak');
@@ -774,6 +791,57 @@ function channelLink(c,ch,msg){
   return null;
 }
 function copyText(t){ try{navigator.clipboard&&navigator.clipboard.writeText(t);}catch{} }
+// The tag after a channel on the card. Starred is their usual; one learned from taps earns the
+// word only once it has a few behind it, so a single tap does not look like a habit.
+function usualTag(c,ch){ if(c.pref===ch&&channelsFor(c).includes(ch))return ' (their usual)';
+  return learnedChannel(c)===ch&&((c.use||{})[ch]||0)>=3?' (usually)':''; }
+
+/* Apps: "play music" or "navigate to the market" opens the app for that job. Each app is a
+ * name, a job and a plain web link, with {q} where the search words go. Web links are what
+ * Android and iPhone hand to the installed app, falling back to the site when it is missing.
+ * Like contacts, the app tapped most for a job becomes the usual one, or star one in settings. */
+const JOBS=[['music','Music'],['maps','Maps'],['video','Video'],['notes','Notes'],['rides','Rides'],['other','Other']];
+const jobWord=j=>(JOBS.find(x=>x[0]===j)||JOBS[5])[1];
+const APP_DEFAULTS=[
+  {name:'SoundCloud',job:'music',url:'https://soundcloud.com/search?q={q}'},
+  {name:'Spotify',job:'music',url:'https://open.spotify.com/search/{q}'},
+  {name:'YouTube',job:'video',url:'https://www.youtube.com/results?search_query={q}'},
+  {name:'Google Maps',job:'maps',url:'https://www.google.com/maps/search/{q}'},
+  {name:'Uber',job:'rides',url:'https://m.uber.com/'},
+  {name:'Google Keep',job:'notes',url:'https://keep.google.com/'}
+];
+let apps=LS.get('ob-apps',null)||APP_DEFAULTS.map(a=>({...a}));
+const saveApps=()=>LS.set('ob-apps',apps);
+function findApp(name){ if(!name)return null; const n=name.toLowerCase().trim();
+  return apps.find(a=>a.name.toLowerCase()===n)||apps.find(a=>a.name.toLowerCase().includes(n)||n.includes(a.name.toLowerCase()))||null; }
+// The apps for a job, usual one first, then by how often each has been tapped.
+function appsFor(job){ return apps.filter(a=>a.job===job).sort((a,b)=>(b.pref?1:0)-(a.pref?1:0)||(b.use||0)-(a.use||0)); }
+function usualApp(job){ const l=appsFor(job); return l.length&&(l[0].pref||l[0].use)?l[0]:null; }
+function learnApp(a){ a.use=(a.use||0)+1; saveApps(); }
+function appLink(a,q){ if(q&&a.url.includes('{q}'))return a.url.replace('{q}',encodeURIComponent(q));
+  // No search words: the link up to its search part, so the app opens on its front page.
+  return a.url.replace(/[?&/][^?&/]*\{q\}.*$/,'').replace(/\/(search|results)\/?$/,''); }
+function addApp(name,job,url){ name=String(name||'').trim(); url=String(url||'').trim(); if(!name)return null;
+  if(url&&!/^[a-z][\w+.-]*:/i.test(url))url='https://'+url;
+  let a=apps.find(x=>x.name.toLowerCase()===name.toLowerCase());
+  if(a){ a.job=job||a.job; if(url)a.url=url; } else apps.push(a={name,job:JOBS.some(j=>j[0]===job)?job:'other',url});
+  saveApps(); renderApps(); return a; }
+// The card for an open request: the app named, else the usual one for the job, with the rest grey.
+function openApp(out){
+  rLabel.textContent='open app';
+  if(out.add){ const a=addApp(out.app,out.job,out.url); if(!a){rBody.textContent='Which app? Say its name.';return;}
+    rBody.textContent=`Added ${a.name} to your apps . ${jobWord(a.job)}`;
+    if(a.url)addAct('Open '+a.name,'go',()=>{learnApp(a);location.href=appLink(a,'');});
+    addAct('Edit apps','alt',()=>openSheet('#sheet-settings')); return; }
+  const named=findApp(out.app), job=named?named.job:out.job, fits=appsFor(job);
+  const first=named||fits[0];
+  if(!first){ rBody.textContent=`No app for ${jobWord(job).toLowerCase()} yet. Add one in settings, or say "add Spotify to my apps for music".`;
+    addAct('Add an app','go',()=>openSheet('#sheet-settings')); return; }
+  const q=(out.query||'').trim(), go=a=>()=>{ learnApp(a); if(q&&!a.url.includes('{q}')){copyText(q);showToast('"'+q+'" copied. Paste it in '+a.name+'.');} location.href=appLink(a,q); };
+  rBody.textContent=`${first.name}${usualApp(job)===first&&!named?' (your usual)':''}${q?': "'+q+'"':''}`;
+  addAct('Open '+first.name,'go',go(first));
+  for(const a of fits){ if(a===first)continue; addAct(a.name,'alt',go(a)); }
+}
 
 function handle(out,original){
   mainLive||(statusEl.textContent='tap to speak');
@@ -795,6 +863,7 @@ function handle(out,original){
     return;
   }
   if(out.kind==='answer'){ rLabel.textContent='answer'; rBody.textContent=out.answer||'...'; return; }
+  if(out.kind==='open'){ openApp(out); return; }
 
   if(out.action==='calendar'){
     rLabel.textContent='calendar'; rBody.textContent=`${out.title||'Event'}${out.start?' . '+new Date(out.start).toLocaleString():''}`;
@@ -824,14 +893,15 @@ function handle(out,original){
   const ch=bestChannel(c,out.channel);
   if(!ch){ rBody.textContent=`No channel saved for ${c.name}. Add a phone or Telegram handle.`; addAct('Edit contacts','go',()=>openSheet('#sheet-settings')); return; }
   const primary=channelLink(c,ch,out.message);
-  const usual=(preferredChannel(c)===ch);
-  rBody.textContent=`${primary.label} ${c.name}${usual?' (their usual)':''}${out.message?': "'+out.message+'"':''}`;
+  rBody.textContent=`${primary.label} ${c.name}${usualTag(c,ch)}${out.message?': "'+out.message+'"':''}`;
   addAct(primary.label,'go',()=>{ learn(c,ch); if(!primary.prefill && out.message){copyText(out.message);showToast('Message copied. Paste it in '+primary.label+'.');} location.href=primary.url; });
   const seen={[ch]:1};
   for(const alt of channelsFor(c)){ if(seen[alt])continue; seen[alt]=1;
     const l=channelLink(c,alt,out.message); if(!l)continue;
     addAct(l.label,'alt',()=>{ learn(c,alt); if(!l.prefill && out.message){copyText(out.message);showToast('Message copied. Paste it in '+l.label+'.');} location.href=l.url; });
   }
+  // Star this channel as their usual from here, without a trip to settings.
+  if(c.pref!==ch) addAct('★ Make '+primary.label+' their usual','alt',()=>{ c.pref=ch; LS.set('ob-contacts',contacts); showToast(primary.label+' is now '+c.name+"'s usual"); handle(out,original); });
 }
 function addAct(label,kind,fn){const b=document.createElement('button');b.className='pill '+kind;b.textContent=label;b.onclick=fn;rActs.appendChild(b);}
 // A call from One Button: inside the app the interview recorder starts first and the call is placed
@@ -1529,6 +1599,23 @@ $('#c-import').onclick=async()=>{
     LS.set('ob-contacts',contacts); renderContacts(); showToast(added+' contacts imported');
   }catch(e){ /* cancelled */ }
 };
+// Settings: each app with its link and job; tap the job tag to star it as the usual one for that job.
+function renderApps(){
+  const list=$('#apps-list'); if(!list)return;
+  if(!apps.length){list.innerHTML=`<div style="color:var(--muted);font-size:13.5px;padding:14px 0">No apps yet.</div>`;return;}
+  list.innerHTML='';
+  apps.forEach((a,i)=>{
+    const star=a.pref||usualApp(a.job)===a;
+    const row=document.createElement('div');row.className='contact-item';
+    row.innerHTML=`<div class="cn">${escapeHtml(a.name)}
+        <div class="cnum">${escapeHtml((a.url||'').replace(/^https?:\/\//,''))||'no link yet'}</div>
+        <div class="ch-tags"><span class="ch-tag${star?' on':''}">${escapeHtml(jobWord(a.job))}${star?' ★':''}</span></div>
+      </div><button class="ndone" aria-label="Remove ${escapeHtml(a.name)}">&times;</button>`;
+    row.querySelector('.ch-tag').onclick=()=>{ const was=a.pref; apps.forEach(x=>{if(x.job===a.job)x.pref=false;}); a.pref=!was; saveApps(); renderApps(); };
+    row.querySelector('.ndone').onclick=()=>{apps.splice(i,1);saveApps();renderApps();};
+    list.appendChild(row);
+  });
+}
 function addToShopping(text){
   const item=(text||'').replace(/^(buy|get|grab|pick up|purchase)\s+/i,'').trim() || text;
   if(notes.some(n=>!n.done&&n.cat==='buy'&&n.text.toLowerCase()===item.toLowerCase())){ showToast('Already on your list'); return; }
@@ -1541,7 +1628,7 @@ $('#set-save').onclick=()=>{const k=$('#set-key').value.trim(); if(k) LS.set('ob
 
 function openSheet(sel){ closeSheets(); $(sel).classList.add('open');
   if(sel==='#sheet-settings'){$('#set-key').value='';$('#key-field').style.display=NATIVE?'none':'';
-    $('#set-lockfull').checked=LS.get('ob-lockfull',true);renderContacts();$('#upd').style.display=NATIVE?'block':'none';renderPlaces();whereNow();}
+    $('#set-lockfull').checked=LS.get('ob-lockfull',true);renderContacts();renderApps();$('#upd').style.display=NATIVE?'block':'none';renderPlaces();whereNow();}
   if(sel==='#sheet-ivs'){renderSpaces();renderInterviews();ivRefresh();spRefresh();}}
 function closeSheets(){document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'));}
 $('#open-proj').onclick=()=>{openSheet('#sheet-proj');renderProj();projRefresh();};
@@ -2262,6 +2349,8 @@ function boot(){
   $('#pl-add-here').onclick=async()=>{await addPlace($('#pl-name').value,$('#pl-kind').value,true);$('#pl-name').value='';};
   $('#pl-add').onclick=async()=>{await addPlace($('#pl-name').value,$('#pl-kind').value,false);$('#pl-name').value='';};
   $('#rh-add').onclick=()=>{addRoutine($('#rh-text').value,+$('#rh-every').value);$('#rh-text').value='';};
+  $('#ap-job').innerHTML=JOBS.map(([k,l])=>'<option value="'+k+'">'+l+'</option>').join('');
+  $('#ap-add').onclick=()=>{if(!addApp($('#ap-name').value,$('#ap-job').value,$('#ap-url').value))return;$('#ap-name').value='';$('#ap-url').value='';};
   loadEvents();renderSpaces();spRefresh();revive();syncAlarms();renderProjMain();projRefresh();checkUpdate();maybeBrief();
 }
 boot();
