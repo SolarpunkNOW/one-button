@@ -18,7 +18,7 @@
     --forest:#FFFFFF; --forest-2:#1A1A1A;
     --terra:#1A1A1A; --ochre:#555555; --spark:#E6FF00;
     --ink:#1A1A1A; --muted:#555555; --line:rgba(26,26,26,.15);
-    --fix:#C84B31; --check:#2f5d3a; --buy:#B5872B; --do:#2C4A6E;
+    --fix:#C84B31; --check:#2f5d3a; --buy:#B5872B; --do:#2C4A6E; --have:#6B7F3A;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
@@ -197,6 +197,13 @@
   .vf.on{display:flex}
   .vf video{flex:1;width:100%;object-fit:cover;min-height:0}
   .vf-row{display:flex;gap:12px;justify-content:center;align-items:center;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+  .pick{background:rgba(26,26,26,.94);justify-content:center;align-items:center;gap:12px;padding:28px}
+  .pick-t{color:#FFFFFF;font:700 20px "Inter Tight",sans-serif;text-align:center;margin-bottom:8px}
+  .pk-b{width:100%;max-width:360px;min-height:56px;padding:0 16px;border:1px solid rgba(255,255,255,.5);background:transparent;color:#FFFFFF;font:600 16px "Inter",sans-serif;cursor:pointer}
+  .pk-b.go{background:var(--spark);color:#1A1A1A;border-color:var(--spark)}
+  .rc{padding:10px 0;border-bottom:1px solid var(--line)}
+  .rc:last-child{border-bottom:0}
+  .rc .tbtn{margin-top:8px}
   .lk-orb{width:112px;height:112px;border-radius:50%;border:none;background:var(--spark);color:#1A1A1A;display:grid;place-items:center;cursor:pointer;transition:transform .15s,opacity .15s}
   .lk-orb:active{transform:scale(.96)}
   .lock.rec .lk-orb{animation:lkpulse 1.1s ease-in-out infinite}
@@ -332,11 +339,12 @@
       <button class="chip" data-cat="fix">Fix</button>
       <button class="chip" data-cat="check">Check</button>
       <button class="chip" data-cat="buy">Buy</button>
+      <button class="chip" data-cat="have">Have</button>
       <button class="chip" data-cat="do">Do</button>
     </div>
     <div id="notes-list"></div>
     </section>
-    <div class="hint" id="hint">Say a thing to do, something you noticed, or a person to reach. I sort which is which.</div>
+    <div class="hint" id="hint">Say a thing to do, something you noticed, what is in the fridge, or a person to reach. I sort which is which.</div>
   </div>
   <nav class="constellation" aria-label="Canopy apps">
     <span class="c-lbl">Canopy</span>
@@ -522,9 +530,10 @@ cfg.model = cfg.model || BAKED.model || 'anthropic/claude-sonnet-4.6';
 let contacts = LS.get('ob-contacts',[]);
 let notes = LS.get('ob-notes',[]);
 notes.forEach(n=>{ if(!n.subs) n.subs=[]; });
+// Have is the pantry: what is in the fridge and cupboards. Not a to-do, so it keeps to its own chip.
 const CAT = {
   fix:{label:'Fix',c:'#C84B31'}, check:{label:'Check',c:'#2f5d3a'},
-  buy:{label:'Buy',c:'#B5872B'}, do:{label:'Do',c:'#2C4A6E'}
+  buy:{label:'Buy',c:'#B5872B'}, do:{label:'Do',c:'#2C4A6E'}, have:{label:'Have',c:'#6B7F3A'}
 };
 const $ = s => document.querySelector(s);
 const orb=$('#orb'), shell=$('#shell'), statusEl=$('#status'), heard=$('#heard'),
@@ -688,8 +697,9 @@ const SYS = `You are the brain of a one-button voice app. The user speaks ONE sh
 Return ONLY raw JSON, no markdown:
 {
  "kind":"capture"|"action"|"open"|"answer",
- "category":"fix"|"check"|"buy"|"do",
+ "category":"fix"|"check"|"buy"|"do"|"have",
  "text":"cleaned one-line note",
+ "items":["for category have only: each thing they have as its own short entry, amount and thing, e.g. six eggs"],
  "due":"for a capture: ISO 8601 date-time if they gave a time or day, else empty",
  "place":"for a capture: a place they named (home, the market), else empty",
  "action":"message"|"call"|"calendar",
@@ -706,7 +716,7 @@ Return ONLY raw JSON, no markdown:
  "url":"for open with add true: the app's web address, with {q} where search words go if it has a search page",
  "answer":"spoken answer, 1-2 sentences"
 }
-Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "play/put on some music", "play Nina Simone", "navigate/directions/take me to X", "open YouTube", "get me a ride home" -> open, with the artist, genre, song or place in query. "add Spotify to my apps for music" -> open with add true. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. Use channel "auto" unless the user names one. Keep text tight. Today is ${new Date().toISOString()}.`;
+Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "play/put on some music", "play Nina Simone", "navigate/directions/take me to X", "open YouTube", "get me a ride home" -> open, with the artist, genre, song or place in query. "add Spotify to my apps for music" -> open with add true. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. "we have six eggs and some rice", "there's half a bag of flour in the cupboard" -> capture, category have, each thing as its own entry in "items"; "we need", "we're out of", "buy" stay buy. Use channel "auto" unless the user names one. Keep text tight. Today is ${new Date().toISOString()}.`;
 // The user's apps, added to the brain's briefing each time so a new one is known straight away.
 const appsHint=()=>apps.length?`\nThe user's apps: ${apps.map(a=>a.name+' ('+a.job+')').join(', ')}. Put the name in "app" when one is said; otherwise leave it empty and set "job".`:'';
 
@@ -735,6 +745,7 @@ async function toClaude(t){
 async function route(text){
   {const s=await spendSaid(text);if(s){mainLive||(statusEl.textContent=s);return;}}
   {const said=await toClaude(text);if(said){mainLive||(statusEl.textContent=said);return;}}
+  if(RECIPE_RE.test(text)){mainLive||(statusEl.textContent='tap to speak');await suggestRecipes(text);return;}
   {const r=rhythmFrom(text);if(r){const n=addRoutine(r.text,r.every);mainLive||(statusEl.textContent='tap to speak');
     result.classList.add('show');rActs.innerHTML='';rLabel.textContent='added to your rhythm . '+everyWord(n.every);rBody.textContent=n.text;
     addAct('Open','go',()=>openNote(n.id));return;}}
@@ -849,6 +860,14 @@ function handle(out,original){
 
   if(out.kind==='capture'){
     const cat=CAT[out.category]?out.category:'do';
+    // Things in the fridge or cupboards go into Have, one entry each, and not onto the to-do list.
+    if(cat==='have'){const its=(Array.isArray(out.items)&&out.items.length?out.items:[out.text||original]).map(x=>String(x||'').trim()).filter(Boolean);
+      const before=new Set(notes.map(x=>x.id)),added=its.map(t=>addHave(t)).filter(Boolean);save();renderNotes();
+      rLabel.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${CAT.have.c};display:inline-block"></span> in the pantry . Have`;
+      rBody.textContent=added.map(n=>n.text).join(', ')||original;
+      addAct('See Have','go',()=>showCat('have'));
+      addAct('Undo','alt',()=>{const ids=new Set(added.map(n=>n.id).filter(id=>!before.has(id)));notes=notes.filter(x=>!ids.has(x.id));save();renderNotes();result.classList.remove('show');});
+      return;}
     rLabel.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${CAT[cat].c};display:inline-block"></span> noticed . ${CAT[cat].label}`;
     rBody.textContent=out.text||original;
     const note={id:Date.now(),text:out.text||original,cat,done:false,ts:Date.now(),subs:[],due:out.due||'',place:out.place||''};
@@ -923,12 +942,14 @@ let filter='all';
 function renderNotes(){
   renderLock();renderProjBoard();
   const list=$('#notes-list');
-  let items=notes.filter(n=>!n.done && !n.deleted && onList(n) && (filter==='all'||n.cat===filter));
+  // The pantry is not a to-do: Have items show under their own chip only.
+  let items=notes.filter(n=>!n.done && !n.deleted && onList(n) && (filter==='all'?n.cat!=='have':n.cat===filter));
   // Tasks for a place the phone is not at wait out of sight; a line at the foot says how many.
   const away=items.filter(n=>!atHere(n)).length;items=items.filter(atHere);
   const awayNote=()=>{if(!away)return;const p=document.createElement('p');p.className='note';
     p.textContent=away+(away>1?' tasks':' task')+' for other places, hidden until you get there.';list.appendChild(p);};
   list.innerHTML='';
+  if(filter==='have'){renderHave(list,items);return;}
   // Tasks that arrived from Claude or a conversation wait here, off the front page, until Jay
   // places each one: on the front, in a project (tap it), or gone.
   const waiting=items.filter(n=>n.hold);items=items.filter(n=>!n.hold);
@@ -962,11 +983,11 @@ function noteRow(n){
     const open=(n.subs||[]).filter(s=>!s.done).length, total=(n.subs||[]).length;
     const row=document.createElement('div');row.className='note-item';
     row.innerHTML=`<span class="ndot" style="background:${CAT[n.cat].c}"></span>
-      <div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${whenOf(n)?`<b>${whenOf(n)}</b> . `:''}${n.every?(n.every===1?'daily':n.every===7?'weekly':n.every===30?'monthly':'every '+n.every+' days')+' . ':''}${n.place?'at '+escapeHtml(n.place)+' . ':''}${sh?escapeHtml(aisleOf(n))+(sh.shop&&!buyView?' . '+(sh.guess?'usually ':'at ')+escapeHtml(sh.shop):''):CAT[n.cat].label} . ${age(n.ts)}${total?`<span class="subcount">${open}/${total}</span>`:''}</div></div>
-      <button class="ndone" title="done">&#10003;</button>`;
+      <div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${whenOf(n)?`<b>${whenOf(n)}</b> . `:''}${n.every?(n.every===1?'daily':n.every===7?'weekly':n.every===30?'monthly':'every '+n.every+' days')+' . ':''}${n.place?'at '+escapeHtml(n.place)+' . ':''}${sh?escapeHtml(aisleOf(n))+(sh.shop&&filter!=='buy'?' . '+(sh.guess?'usually ':'at ')+escapeHtml(sh.shop):''):n.cat==='have'?escapeHtml(aisleOf(n)):CAT[n.cat].label} . ${n.cat==='have'?haveAge(n.ts):age(n.ts)}${total?`<span class="subcount">${open}/${total}</span>`:''}</div></div>
+      <button class="ndone" title="${n.cat==='have'?'run out':'done'}">&#10003;</button>`;
     row.querySelector('.ntext').onclick=()=>openNote(n.id);
     row.querySelector('.ndot').onclick=()=>openNote(n.id);
-    row.querySelector('.ndone').onclick=(e)=>{e.stopPropagation();tick(n);noteWhere(n.id,'done',fixNow());save();renderNotes();};
+    row.querySelector('.ndone').onclick=(e)=>{e.stopPropagation();if(n.cat==='have'){usedUp(n);return;}tick(n);noteWhere(n.id,'done',fixNow());save();renderNotes();};
     return row;
 }
 /* Shopping in Dahab: each thing to buy has a kind (its aisle) and a shop. Set a shop once and
@@ -990,14 +1011,16 @@ function shopOf(n){if(n.store)return {shop:n.store,guess:false};
   const best=Object.entries(c).sort((p,q)=>q[1]-p[1])[0];return {shop:best?best[0]:'',guess:true};}
 const shopList=()=>[...new Set([...notes.map(x=>x.store).filter(Boolean),...LS.get('ob-shops',[])])].sort();
 // Tapped through from an item only: the most ethical local source, found with a web search.
-function renderShop(n){const box=$('#nd-shop');if(n.cat!=='buy'){box.innerHTML='';return;}
+function renderShop(n){const box=$('#nd-shop');if(n.cat!=='buy'&&n.cat!=='have'){box.innerHTML='';return;}
   const a=aisleOf(n),sh=shopOf(n);
-  box.innerHTML=`<div class="nmeta" style="margin:10px 0 4px">Kind</div><div>${AISLES.map(([x])=>x).concat('Other').map(x=>`<button class="chip${x===a?' on':''}" data-aisle="${escapeHtml(x)}">${escapeHtml(x)}</button>`).join('')}</div>
-    <div class="nmeta" style="margin:10px 0 4px">Shop${sh.shop&&sh.guess?` (guessed: ${escapeHtml(sh.shop)})`:''}</div>
+  // A pantry item has a kind but no shop: the kind is how the Have list is grouped.
+  box.innerHTML=`<div class="nmeta" style="margin:10px 0 4px">Kind</div><div>${AISLES.map(([x])=>x).concat('Other').map(x=>`<button class="chip${x===a?' on':''}" data-aisle="${escapeHtml(x)}">${escapeHtml(x)}</button>`).join('')}</div>`
+    +(n.cat==='buy'?`<div class="nmeta" style="margin:10px 0 4px">Shop${sh.shop&&sh.guess?` (guessed: ${escapeHtml(sh.shop)})`:''}</div>
     <div>${shopList().map(s=>`<button class="chip${s===n.store?' on':''}" data-shop="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>
     <input class="nd-when" id="nd-newshop" placeholder="Add a shop, e.g. Assala veg market" aria-label="Add a shop" style="margin-top:6px">
-    <button class="tbtn" id="nd-src-go" style="margin-top:10px">Most ethical local source</button><div id="nd-src"></div>`;
+    <button class="tbtn" id="nd-src-go" style="margin-top:10px">Most ethical local source</button><div id="nd-src"></div>`:'');
   box.querySelectorAll('[data-aisle]').forEach(b=>b.onclick=()=>{n.aisle=b.dataset.aisle;save();renderNotes();renderShop(n);});
+  if(n.cat!=='buy')return;
   box.querySelectorAll('[data-shop]').forEach(b=>b.onclick=()=>{n.store=n.store===b.dataset.shop?'':b.dataset.shop;save();renderNotes();renderShop(n);});
   $('#nd-newshop').onchange=e=>{const s=e.target.value.trim();if(!s)return;LS.set('ob-shops',[...new Set([...LS.get('ob-shops',[]),s])]);n.store=s;save();renderNotes();renderShop(n);};
   $('#nd-src-go').onclick=()=>findSource(n,false);}
@@ -1452,11 +1475,12 @@ const taskKey=t=>String(t||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\
 /* A new capture that matches an earlier task joins it instead of making a duplicate. Three or
  * more ticks set the rhythm by itself (the typical gap between them), unless you chose one. */
 function absorb(x){const k=taskKey(x.text);if(!k)return false;
-  const old=notes.find(n=>!n.deleted&&taskKey(n.text)===k);if(!old)return false;
+  // Have keeps to itself: "we have eggs" restocks the pantry, it never revives a Buy for eggs, and the other way round.
+  const old=notes.find(n=>!n.deleted&&taskKey(n.text)===k&&((n.cat==='have')===(x.cat==='have')));if(!old)return false;
   if(old.done){old.done=false;delete old.doneAt;}
   if(x.due)old.due=x.due;
   const h=old.hist||[];
-  if(h.length>=2&&old.everyBy!=='you'){const gaps=h.slice(1).map((t,i)=>(t-h[i])/DAY).concat((Date.now()-h[h.length-1])/DAY).sort((a,b)=>a-b);
+  if(h.length>=2&&old.everyBy!=='you'&&old.cat!=='have'){const gaps=h.slice(1).map((t,i)=>(t-h[i])/DAY).concat((Date.now()-h[h.length-1])/DAY).sort((a,b)=>a-b);
     const every=Math.max(1,Math.round(gaps[Math.floor(gaps.length/2)]));
     if(old.every!==every){old.every=every;old.everyBy='learned';showToast(`${old.text}: looks like every ${every} day${every>1?'s':''}, set to repeat`);}}
   old.ts=Date.now();return true;}
@@ -1500,7 +1524,7 @@ const dayKey=t=>{const d=new Date(t);return d.getFullYear()+'-'+(d.getMonth()+1)
 function celebrate(){
   if(document.hidden||document.querySelector('.sheet.open'))return;
   const seen=LS.get('ob-cele',[]), now=new Date(), today=dayKey(now), yest=dayKey(Date.now()-864e5);
-  const done=notes.filter(n=>n.done&&n.doneAt&&Date.now()-n.doneAt<3*864e5);
+  const done=notes.filter(n=>n.done&&n.doneAt&&n.cat!=='have'&&Date.now()-n.doneAt<3*864e5);
   const days=[...new Set(done.map(n=>dayKey(n.doneAt)))].filter(k=>!seen.includes(k)&&(k!==today||now.getHours()>=18));
   if(!days.length)return;
   const day=days.sort((a,b)=>Math.max(...done.filter(n=>dayKey(n.doneAt)===b).map(n=>n.doneAt))-Math.max(...done.filter(n=>dayKey(n.doneAt)===a).map(n=>n.doneAt)))[0];
@@ -1623,6 +1647,66 @@ function addToShopping(text){
   save(); renderNotes(); showToast('Added to shopping list');
 }
 
+/* Have: the pantry. What is in the fridge and cupboards, said ("we have six eggs"), or seen in a
+ * photo. Each item keeps the time it was added; ticking one off means it has run out. */
+let haveSeq=0;
+// Something in the fridge or a cupboard. Said again, it is restocked rather than listed twice.
+function addHave(text,aisle){text=String(text||'').replace(/^(?:we|i)(?:'ve| have| got|'ve got)\s+(?:got\s+)?/i,'').replace(/[.!]+$/,'').trim();if(!text)return null;
+  const n={id:Date.now()+(haveSeq++%997),text,cat:'have',done:false,ts:Date.now(),subs:[]};
+  if(aisle&&AISLES.some(([a])=>a===aisle))n.aisle=aisle;
+  if(absorb(n))return notes.find(x=>!x.deleted&&x.cat==='have'&&taskKey(x.text)===taskKey(text))||null;
+  notes.unshift(n);return n;}
+// Everything in the pantry, oldest first, so recipes lean on what has been there longest.
+const pantry=()=>notes.filter(n=>n.cat==='have'&&!n.done&&!n.deleted).sort((a,b)=>(a.ts||0)-(b.ts||0));
+// How long something has been in: as for tasks, but past two weeks it just says so quietly.
+const haveAge=ts=>Date.now()-ts>14*DAY?'a while ago':age(ts);
+function showCat(c){const b=$('#cat-filter [data-cat="'+c+'"]');if(b)b.click();}
+// The Have list: by kind, oldest first within a kind, with the two things to do with a pantry on top.
+function renderHave(list,items){
+  const bar=document.createElement('div');bar.className='iv-row';bar.style.margin='0 0 10px';
+  bar.innerHTML=`<button class="tbtn" id="hv-photo">Stock the pantry from a photo</button><button class="tbtn" id="hv-cook">What can I cook?</button>`;list.appendChild(bar);
+  $('#hv-photo').onclick=()=>takePhoto('pantry');
+  $('#hv-cook').onclick=()=>{suggestRecipes('what can I cook tonight');result.scrollIntoView({behavior:'smooth',block:'start'});};
+  if(!items.length){list.insertAdjacentHTML('beforeend','<div class="empty">Nothing in the pantry yet.<br>Say "we have six eggs and some rice", or take a photo of the open fridge.</div>');return;}
+  items=items.slice().sort((a,b)=>aisleOf(a).localeCompare(aisleOf(b))||(a.ts||0)-(b.ts||0));let last=null;
+  for(const n of items){const k=aisleOf(n);if(k!==last){last=k;const hd=document.createElement('div');hd.className='iv-h';hd.textContent=k;list.appendChild(hd);}list.appendChild(noteRow(n));}}
+// A pantry item ticked off has run out: it leaves Have, and one tap puts it on Buy.
+function usedUp(n){tick(n);save();renderNotes();
+  result.classList.add('show');rActs.innerHTML='';rLabel.textContent='run out . Have';rBody.textContent=n.text;
+  addAct('Add to Buy','go',()=>{addToShopping(n.text);result.classList.remove('show');});
+  addAct('Undo','alt',()=>{n.done=false;delete n.doneAt;save();renderNotes();result.classList.remove('show');});
+  result.scrollIntoView({behavior:'smooth',block:'nearest'});}
+/* Recipes. "What can I cook tonight" or "suggest a recipe" reads the Have list and answers with two
+ * or three recipes that mostly use it, each with what is there and what is missing. One button under
+ * each puts the missing bits on Buy, sorted into kinds and shops the usual way, duplicates skipped. */
+const RECIPE_RE=/\b(?:what (?:can|could|should|shall) (?:i|we) (?:cook|make|eat|have for)|what(?:'s| is) for (?:dinner|lunch|supper|tea|breakfast)|(?:suggest|propose|recommend|give me|any|some|got any) (?:a |an |some |me )?(?:\w+ )?recipes?|recipe ideas?|what to cook|ideas? for (?:dinner|lunch|supper|tea))\b/i;
+const RECIPE_SYS=`The user keeps a list of the food they have at home, oldest first. Suggest 2 or 3 recipes that mostly use what they have, leaning on the older items. Return ONLY a raw JSON array, no markdown: [{"name":"short recipe name","uses":["things from their list it uses, worded as on the list"],"missing":["things to buy, one short entry each, no amounts unless they matter"],"how":"two or three plain sentences on how to make it"}]. Leave salt, pepper, water and cooking oil out of missing. If their list has nothing to cook with, return [].`;
+async function suggestRecipes(text){
+  const have=pantry();
+  result.classList.add('show');rActs.innerHTML='';rLabel.textContent='recipes';hint.style.display='none';
+  if(!have.length){rBody.textContent='Your Have list is empty. Say what is in the fridge, or take a photo of it, then ask again.';
+    addAct('Stock the pantry from a photo','go',()=>takePhoto('pantry'));return;}
+  rBody.textContent='looking at what you have...';orb.classList.add('busy');
+  try{
+    const list=have.map(n=>n.text+(Date.now()-n.ts>14*DAY?' (in a while)':'')).join('\n');
+    const arr=parseJSON(await ask([{role:'system',content:RECIPE_SYS},{role:'user',content:`What I have:\n${list}\n\nAsked: ${text}`}]));
+    if(!Array.isArray(arr)||!arr.length)throw new Error('nothing came back');
+    const rs=arr.slice(0,3).map(r=>({name:String(r.name||'A recipe'),how:String(r.how||''),uses:(r.uses||[]).map(String),missing:(r.missing||[]).map(String).filter(Boolean)}));
+    rBody.innerHTML=rs.map((r,i)=>`<div class="rc"><b>${escapeHtml(r.name)}</b><div class="note" style="margin:4px 0">${escapeHtml(r.how)}</div>
+      <div class="nmeta">You have: ${escapeHtml(r.uses.join(', ')||'nothing from the list')}</div>
+      <div class="nmeta">Missing: ${escapeHtml(r.missing.join(', ')||'nothing')}</div>
+      ${r.missing.length?`<button class="tbtn" data-rc="${i}">Add the missing bits to Buy</button>`:''}</div>`).join('');
+    rBody.querySelectorAll('[data-rc]').forEach(b=>b.onclick=()=>{addMissing(rs[+b.dataset.rc].missing);b.disabled=true;b.textContent='On your Buy list';});
+  }catch(err){rBody.textContent='Could not get recipes: '+(err.message||err);}
+  finally{orb.classList.remove('busy');mainLive||(statusEl.textContent='tap to speak');}}
+// The missing ingredients onto Buy, each sorted as usual; anything already there is left alone.
+function addMissing(list){let added=0,there=0;
+  for(const raw of list){const item=String(raw||'').replace(/^(buy|get|some)\s+/i,'').trim();if(!item)continue;
+    const k=taskKey(item);if(notes.some(n=>!n.done&&!n.deleted&&n.cat==='buy'&&taskKey(n.text)===k)){there++;continue;}
+    const t={id:Date.now()+(haveSeq++%997),text:item,cat:'buy',done:false,ts:Date.now(),subs:[],store:''};if(!absorb(t))notes.unshift(t);added++;}
+  save();renderNotes();
+  showToast(added?added+' added to Buy'+(there?', '+there+' already there':''):'All of that is on your Buy list already');}
+
 $('#set-save').onclick=()=>{const k=$('#set-key').value.trim(); if(k) LS.set('ob-key',k);
   LS.set('ob-lockfull',$('#set-lockfull').checked);showToast('Saved');closeSheets();statusEl.textContent='tap to speak';};
 
@@ -1672,7 +1756,7 @@ function lockClock(){const d=new Date();
   $('#lk-date').textContent=d.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long'});}
 function renderLock(){
   if(!lock.classList.contains('on'))return;
-  const items=notes.filter(n=>!n.done&&!n.deleted&&onList(n)&&atHere(n));
+  const items=notes.filter(n=>!n.done&&!n.deleted&&n.cat!=='have'&&onList(n)&&atHere(n));
   {const n=items.filter(x=>!x.hold).length;$('#lk-count').textContent=n?n+' open':'';}
   const lkPrs=lockProjects(),lkNeeds=!window.OB_BUILDS?[]:ASKS.filter(a=>a.kind==='app'&&['plan','preview'].includes(askStage(a)));
   if(!items.length&&!lkPrs.length){lkList.innerHTML='<div class="lk-empty">Nothing open. Tap the button and say what needs doing.</div>';return;}
@@ -1764,7 +1848,7 @@ function hideLock(){lock.classList.remove('on');clearInterval(lkClockT);}
 let lkRec=null, lkLive=false;
 // Leaving the app ends a recording made in the page, so the microphone is never left on out of sight.
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)return;if(mainLive&&mainRec)mainRec.stop();if(lkLive&&lkRec)lkRec.stop();});
-const TASKS_SYS=`The user speaks to a to-do app from their phone's lock screen. Pull out every task they mention. Return ONLY a raw JSON array, no markdown: [{"text":"short clean task","category":"fix"|"check"|"buy"|"do","due":"ISO 8601 date-time if they gave a time or day, else empty","place":"a place they named (home, the market), else empty","aisle":"for buy only, one of: ${AISLES.map(a=>a[0]).join(' | ')}, else empty","every":"days between repeats if they say it repeats (every day 1, every week 7, every month 30) or it is plainly a routine chore, else 0"}]. One item per separate task. An alarm ("set an alarm at 5") is an item whose text starts "Alarm", with its time as due. Keep their meaning and any time, place or person they name. Today is ${new Date().toString()}. If there is no task, return [].`;
+const TASKS_SYS=`The user speaks to a to-do app from their phone's lock screen. Pull out every task they mention. Return ONLY a raw JSON array, no markdown: [{"text":"short clean task","category":"fix"|"check"|"buy"|"do"|"have","due":"ISO 8601 date-time if they gave a time or day, else empty","place":"a place they named (home, the market), else empty","aisle":"for buy or have only, one of: ${AISLES.map(a=>a[0]).join(' | ')}, else empty","every":"days between repeats if they say it repeats (every day 1, every week 7, every month 30) or it is plainly a routine chore, else 0"}]. One item per separate task. An alarm ("set an alarm at 5") is an item whose text starts "Alarm", with its time as due. Food they say they have at home ("we have six eggs and half a bag of rice") is category have, one item per thing, text being the amount and the thing. Keep their meaning and any time, place or person they name. Today is ${new Date().toString()}. If there is no task, return [].`;
 // Status from an earlier recording never covers one in progress.
 const lkSay=s=>{if(!lkLive&&!intOn)lkStatus.textContent=s;};
 function lockRecord(){
@@ -1795,6 +1879,8 @@ async function lockText(t){
           if(!c.phone&&!(svc==='telegram'&&c.tg)){lkSay(`No number saved for ${c.name}`);return;}
           lkSay(`Calling ${c.name}${svc!=='phone'?' on '+svc:''}${NATIVE&&NATIVE.placeCall?', recording':''}`);callPerson(c,svc);return;}}
       {const said=await toClaude(t);if(said){lock.classList.remove('busy');lkSay(said);return;}}
+      // Recipes need room to read: they open in the app.
+      if(RECIPE_RE.test(t)){lock.classList.remove('busy');hideLock();route(t);return;}
       {const r=rhythmFrom(t);if(r){const n=addRoutine(r.text,r.every);lock.classList.remove('busy');lkSay('added to your rhythm, '+everyWord(n.every));return;}}
       lkSay('adding...');
       let arr=null;
@@ -1802,9 +1888,10 @@ async function lockText(t){
       if(!Array.isArray(arr)) arr=[{text:t,category:'do'}]; // brain unreachable: keep the words as one task
       arr=arr.filter(x=>x&&x.text);
       const now=Date.now();
-      arr.slice().reverse().forEach((x,i)=>{const t={id:now+i,text:x.text,cat:CAT[x.category]?x.category:'do',done:false,ts:now,subs:[],due:x.due||'',place:x.place||''};const ev=Number(x.every)||0;if(t.cat==='buy'&&x.aisle&&AISLES.some(([a])=>a===x.aisle))t.aisle=x.aisle;if(ev){t.every=ev;t.everyBy='guess';}if(absorb(t))return;notes.unshift(t);noteWhere(now+i,'said',pendingFix);});
+      arr.slice().reverse().forEach((x,i)=>{const t={id:now+i,text:x.text,cat:CAT[x.category]?x.category:'do',done:false,ts:now,subs:[],due:x.due||'',place:x.place||''};const ev=Number(x.every)||0;if((t.cat==='buy'||t.cat==='have')&&x.aisle&&AISLES.some(([a])=>a===x.aisle))t.aisle=x.aisle;if(ev){t.every=ev;t.everyBy='guess';}if(absorb(t))return;notes.unshift(t);noteWhere(now+i,'said',pendingFix);});
       save();renderNotes();lock.classList.remove('busy');
-      lkSay(arr.length?'added '+arr.length+(arr.length>1?' tasks':' task'):'no task heard, tap to try again');
+      const have=arr.filter(x=>x.category==='have').length;
+      lkSay(!arr.length?'no task heard, tap to try again':have===arr.length?'added '+have+' to Have':'added '+arr.length+(arr.length>1?' tasks':' task'));
 }
 
 let intOn=false, intStart=0, intT=null, intWeb=null;
@@ -2169,18 +2256,59 @@ const camIn=$('#cam-in');
 let camBusy=false;
 // In a browser the phone's own camera app opens through the file picker. Inside the One Button
 // app there is no picker, so the page shows its own viewfinder instead.
-function takePhoto(){if(camBusy){showToast('Still sending the last one');return;}if(!obKey()){showToast('App key missing');return;}
+// Two kinds of photo: 'task' (a receipt, a sketch, a thing to do: the server sorts it) or 'pantry'
+// (the open fridge or a cupboard, to stock the Have list). With no kind given, ask first.
+let camKind='task';
+function takePhoto(kind){if(camBusy){showToast('Still sending the last one');return;}if(!obKey()){showToast('App key missing');return;}
+  if(!kind){pickPhotoKind();return;}camKind=kind;
   if(window.OBNative||!('capture' in document.createElement('input')))openViewfinder();else{camIn.value='';camIn.click();}}
-$('#cam-main').onclick=takePhoto;$('#lk-cam').onclick=takePhoto;
+$('#cam-main').onclick=()=>takePhoto();$('#lk-cam').onclick=()=>takePhoto();
+// The choice, over everything (the lock screen too): one tap, then the camera.
+function pickPhotoKind(){let box=$('#pk');
+  if(!box){box=document.createElement('div');box.id='pk';box.className='vf pick';
+    box.innerHTML=`<div class="pick-t">What is the photo of?</div><button class="pk-b go" id="pk-task">A receipt, a sketch or a thing to do</button><button class="pk-b" id="pk-have">The fridge or a cupboard: stock the pantry</button><button class="pk-b" id="pk-x" style="border-color:transparent">Cancel</button>`;
+    document.body.appendChild(box);
+    $('#pk-task').onclick=()=>{box.classList.remove('on');takePhoto('task');};
+    $('#pk-have').onclick=()=>{box.classList.remove('on');takePhoto('pantry');};
+    $('#pk-x').onclick=()=>box.classList.remove('on');}
+  box.classList.add('on');}
 const camSay=s=>{showToast(s);if(lock.classList.contains('on'))lkSay(s);};
 camIn.onchange=async()=>{const f=camIn.files&&camIn.files[0];if(!f)return;
   try{await sendPhoto(await shrinkImage(f,1600,.85));}catch(e){camSay('Could not read the photo');}};
-async function sendPhoto(blob){camBusy=true;camSay('Reading the photo...');
+async function sendPhoto(blob){camBusy=true;
+  if(camKind==='pantry'){await sendPantryPhoto(blob);camBusy=false;return;}
+  camSay('Reading the photo...');
   try{const r=await fetch(API+'/api/photo?mime=image/jpeg',{method:'POST',headers:{'Content-Type':'image/jpeg','x-ob-key':obKey()},body:blob});
     const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.text||d.error||'failed');
     camSay(d.text||'Saved');PHOTOS=null;syncNow();ivRefresh();}
   catch(e){camSay('Could not send the photo: '+(e.message||'try again'));}
   camBusy=false;}
+/* A photo of the fridge or a cupboard. The server names the food it can see and sends the names
+ * back; nothing goes into Have until Jay has looked the list over. Several photos in a row pile
+ * into the same list. What the server must do for POST /api/photo/pantry (JPEG body, the usual
+ * key): answer {items:[{text:"six eggs",aisle:"Dairy, eggs and meat"},...]}, aisle optional and one
+ * of the kinds in AISLES; plain strings are fine too. Until the server has learned this it answers
+ * 404, and the phone says so. */
+let PANTRY_SEEN=[];
+async function sendPantryPhoto(blob){camSay('Looking at what is there...');
+  try{const r=await fetch(API+'/api/photo/pantry?mime=image/jpeg',{method:'POST',headers:{'Content-Type':'image/jpeg','x-ob-key':obKey()},body:blob});
+    if(r.status===404)throw new Error('the server cannot read pantry photos yet');
+    const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.text||d.error||'failed');
+    const its=(d.items||[]).map(x=>typeof x==='string'?{text:x}:x).filter(x=>x&&x.text);
+    if(!its.length){camSay('Could not make out any food in that photo');return;}
+    let fresh=0;for(const x of its){if(PANTRY_SEEN.some(s=>taskKey(s.text)===taskKey(x.text)))continue;PANTRY_SEEN.push({text:String(x.text).trim(),aisle:x.aisle||'',on:true});fresh++;}
+    if(lock.classList.contains('on'))hideLock();closeSheets();
+    renderPantrySeen();showToast(fresh+' seen'+(PANTRY_SEEN.length>fresh?', '+PANTRY_SEEN.length+' on the list':''));}
+  catch(e){camSay('Could not read the photo: '+(e.message||'try again'));}}
+// The check-list from the photos: untick what it got wrong, then one tap puts the rest in Have.
+function renderPantrySeen(){result.classList.add('show');rActs.innerHTML='';rLabel.textContent='seen in the photo . untick anything wrong';
+  rBody.innerHTML=PANTRY_SEEN.map((x,i)=>`<label class="iv-act"><input type="checkbox" data-ps="${i}" ${x.on?'checked':''}><span>${escapeHtml(x.text)}${x.aisle?` <span class="iv-tag">${escapeHtml(x.aisle)}</span>`:''}</span></label>`).join('');
+  rBody.querySelectorAll('[data-ps]').forEach(c=>c.onchange=()=>{PANTRY_SEEN[+c.dataset.ps].on=c.checked;});
+  addAct('Add these to Have','go',()=>{const on=PANTRY_SEEN.filter(x=>x.on);if(!on.length){showToast('Tick the ones to keep first');return;}
+    on.forEach(x=>addHave(x.text,x.aisle));PANTRY_SEEN=[];save();renderNotes();result.classList.remove('show');showCat('have');showToast(on.length+' added to Have');});
+  addAct('Another photo','alt',()=>takePhoto('pantry'));
+  addAct('Forget these','alt',()=>{PANTRY_SEEN=[];result.classList.remove('show');});
+  result.scrollIntoView({behavior:'smooth',block:'nearest'});}
 // The page's own viewfinder: live camera, one Take button, one Close.
 let vfStream=null;
 async function openViewfinder(){if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){camSay('No camera here');return;}
@@ -2218,7 +2346,7 @@ async function renderPhotos(){const b=$('#photos-body');b.innerHTML='<p class="n
         <div class="ph-thumb" data-photo="${escapeHtml(p.id)}"></div>
         ${p.text?`<p class="note" style="white-space:pre-wrap">${escapeHtml(p.text)}</p>`:''}
         ${a?(a.status==='done'?`<div class="iv-tag">Claude</div><div class="iv-ans" style="white-space:pre-wrap">${escapeHtml(a.answer||'')}</div>`:`<div class="iv-tag">${escapeHtml(taskAskLabel(a))}</div>`):''}</div>`;}).join('')||'<p class="note">No photos yet.</p>'}`;
-  $('#ph-take').onclick=takePhoto;
+  $('#ph-take').onclick=()=>takePhoto();
   b.querySelectorAll('.ph-thumb').forEach(el=>photoInto(el,el.dataset.photo));}
 $('#open-photos').onclick=()=>{openSheet('#sheet-photos');renderPhotos();};
 function wireAskCards(box){
