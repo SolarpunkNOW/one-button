@@ -403,7 +403,7 @@
     <div class="addrow"><input id="pl-name" class="full" placeholder="A place, e.g. Home, the kids' house" />
       <select id="pl-kind" aria-label="Kind of place" style="min-height:44px"></select>
       <button id="pl-add-here">Add, I am here</button><button id="pl-add" class="tbtn">Add</button></div>
-    <p class="note">Locations stay on this phone. When you are at a place, its tasks come first on the lock screen.</p>
+    <p class="note">Locations stay on this phone. When you are at a place, its tasks come first on the lock screen. Tasks for other places stay hidden until you get there.</p>
     <div style="height:26px"></div>
     <label class="set-h">My daily rhythm</label>
     <div id="rhythm-list"></div>
@@ -569,12 +569,13 @@ let WHERE=LS.get('ob-where',{}), pendingFix=null;
 // A pretend position, set from Settings to test places without walking there. Lasts ten minutes.
 let FAKE=LS.get('ob-fake',null);if(FAKE&&Date.now()>FAKE.until){FAKE=null;LS.set('ob-fake',null);}
 let LAST_FIX=null;
-function fixNow(){return new Promise(res=>{
+// maxAge: how old a remembered position may be, in ms. Place checks ask for a fresher one.
+function fixNow(maxAge){return new Promise(res=>{
   if(FAKE&&Date.now()<FAKE.until)return res(LAST_FIX={lat:FAKE.lat,lng:FAKE.lng,acc:5,ts:Date.now(),fake:true});
   if(!navigator.geolocation) return res(null);
   navigator.geolocation.getCurrentPosition(
     p=>res(LAST_FIX={lat:+p.coords.latitude.toFixed(5),lng:+p.coords.longitude.toFixed(5),acc:Math.round(p.coords.accuracy),ts:Date.now()}),
-    ()=>res(null),{maximumAge:300000,timeout:8000,enableHighAccuracy:false});
+    ()=>res(null),{maximumAge:maxAge||300000,timeout:8000,enableHighAccuracy:false});
 });}
 function noteWhere(id,kind,fixP){ if(!fixP)return; fixP.then(f=>{ if(!f)return;
   (WHERE[String(id)]=WHERE[String(id)]||{})[kind]=f; LS.set('ob-where',WHERE); }); }
@@ -853,6 +854,10 @@ function renderNotes(){
   renderLock();renderProjBoard();
   const list=$('#notes-list');
   let items=notes.filter(n=>!n.done && !n.deleted && onList(n) && (filter==='all'||n.cat===filter));
+  // Tasks for a place the phone is not at wait out of sight; a line at the foot says how many.
+  const away=items.filter(n=>!atHere(n)).length;items=items.filter(atHere);
+  const awayNote=()=>{if(!away)return;const p=document.createElement('p');p.className='note';
+    p.textContent=away+(away>1?' tasks':' task')+' for other places, hidden until you get there.';list.appendChild(p);};
   list.innerHTML='';
   // Tasks that arrived from Claude or a conversation wait here, off the front page, until Jay
   // places each one: on the front, in a project (tap it), or gone.
@@ -872,7 +877,7 @@ function renderNotes(){
     for(const n of mine)list.appendChild(noteRow(n));}
   items=items.filter(n=>!inTop.has(n.id)&&!(document.documentElement.classList.contains('backend')&&inPr(n)));
   if(top.length&&items.length){const hd=document.createElement('div');hd.className='iv-h';hd.style.marginTop='18px';hd.textContent='Everything else';list.appendChild(hd);}
-  if(!items.length&&!top.length){list.innerHTML=`<div class="empty">Nothing here yet.<br>Speak something you noticed and it lands here.</div>`;return;}
+  if(!items.length&&!top.length){list.innerHTML=`<div class="empty">Nothing here yet.<br>Speak something you noticed and it lands here.</div>`;awayNote();return;}
   // The Buy list reads like a round of the shops: grouped by shop, then by kind of thing.
   const buyView=filter==='buy';let lastShop=null;
   if(buyView)items=items.slice().sort((a,b)=>(shopOf(a).shop||'~').localeCompare(shopOf(b).shop||'~')||aisleOf(a).localeCompare(aisleOf(b)));
@@ -880,6 +885,7 @@ function renderNotes(){
     if(buyView){const s=shopOf(n).shop||'Shop not set yet';if(s!==lastShop){lastShop=s;const hd=document.createElement('div');hd.className='iv-h';hd.textContent=s;list.appendChild(hd);}}
     list.appendChild(noteRow(n));
   }
+  awayNote();
 }
 function noteRow(n){
     const sh=n.cat==='buy'?shopOf(n):null;
@@ -1268,7 +1274,7 @@ function eventAlarms(now){const out=[];
 /* Places. Jay's spaces (his home, where his kids live, a shop, a beach he looks after) with where
  * they are, kept on this phone only. A task can belong to a place, including one he has no tie to
  * but saw something worth doing there. When the phone is at a place, its tasks come first on the
- * lock screen. */
+ * lock screen. Tasks for any other place stay out of sight until the phone gets there. */
 const PLACE_KINDS=[['home','My home'],['family','Family'],['work','Work'],['community','Community'],['other','Other']];
 let PLACES=LS.get('ob-places',[]), HERE=null;
 const savePlaces=()=>LS.set('ob-places',PLACES);
@@ -1276,12 +1282,15 @@ const metres=(a,b)=>{const R=6371e3,r=x=>x*Math.PI/180,dl=r(b.lat-a.lat),dn=r(b.
   const h=Math.sin(dl/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h));};
 // Which of Jay's places the phone is at now, if any (within the place's radius, 200 m unless set).
 // Arriving somewhere with open tasks brings them up on the lock screen with a buzz. Checked at
-// start, whenever the phone's position changes while the app is open, and once a minute.
-function whereNow(f){const go=fix=>{if(!fix)return;const at=PLACES.filter(p=>p.lat!=null).map(p=>({p,d:metres(fix,p)})).filter(x=>x.d<=(x.p.r||200)).sort((a,b)=>a.d-b.d)[0];
+// start, each time the app comes back or the lock screen shows, whenever the phone's position
+// changes while the app is open, and once a minute. No position (beyond a position from the last
+// five minutes) means no place: better to show nowhere than somewhere old.
+function whereNow(f){const go=fix=>{if(!fix&&LAST_FIX&&Date.now()-LAST_FIX.ts<5*60e3)fix=LAST_FIX;
+  const at=fix?PLACES.filter(p=>p.lat!=null).map(p=>({p,d:metres(fix,p)})).filter(x=>x.d<=(x.p.r||200)).sort((a,b)=>a.d-b.d)[0]:null;
   const was=HERE&&HERE.id;HERE=at?at.p:null;
   if((HERE&&HERE.id)!==was){renderNotes();if(HERE)arrived(HERE);}
   if($('#sheet-settings').classList.contains('open'))renderPlaces();};
-  f?go(f):fixNow().then(go);}
+  f?go(f):fixNow(60000).then(go);}
 function arrived(p){const ts=notes.filter(n=>!n.done&&!n.deleted&&!n.routine&&placeOf(n)&&placeOf(n).id===p.id);if(!ts.length)return;
   try{navigator.vibrate&&navigator.vibrate([200,100,200,100,400]);}catch{}
   showToast(`You're at ${p.name}: ${ts.length} thing${ts.length>1?'s':''} to do here`);
@@ -1297,6 +1306,8 @@ function pretendAt(p){FAKE=p?{lat:p.lat,lng:p.lng,name:p.name,until:Date.now()+1
 // A task's place: the one chosen, or a place named when it was said ("at home" -> the home).
 function placeOf(n){if(!n.place)return null;const k=n.place.toLowerCase();
   return PLACES.find(p=>p.name.toLowerCase()===k)||(k==='home'?PLACES.find(p=>p.kind==='home'):null)||null;}
+// Whether a task shows on the lists now: no place, a place the phone knows nothing about, or the place it is at.
+function atHere(n){const p=placeOf(n);return !p||!!(HERE&&HERE.id===p.id);}
 // Settings: every place with its radius, how far away it is now, and a way to pretend to be there.
 function renderPlaces(){const box=$('#places-list');if(!box)return;
   const dist=p=>p.lat!=null&&LAST_FIX?Math.round(metres(LAST_FIX,p))+' m away':'';
@@ -1530,7 +1541,7 @@ $('#set-save').onclick=()=>{const k=$('#set-key').value.trim(); if(k) LS.set('ob
 
 function openSheet(sel){ closeSheets(); $(sel).classList.add('open');
   if(sel==='#sheet-settings'){$('#set-key').value='';$('#key-field').style.display=NATIVE?'none':'';
-    $('#set-lockfull').checked=LS.get('ob-lockfull',true);renderContacts();$('#upd').style.display=NATIVE?'block':'none';}
+    $('#set-lockfull').checked=LS.get('ob-lockfull',true);renderContacts();$('#upd').style.display=NATIVE?'block':'none';renderPlaces();whereNow();}
   if(sel==='#sheet-ivs'){renderSpaces();renderInterviews();ivRefresh();spRefresh();}}
 function closeSheets(){document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'));}
 $('#open-proj').onclick=()=>{openSheet('#sheet-proj');renderProj();projRefresh();};
@@ -1574,7 +1585,7 @@ function lockClock(){const d=new Date();
   $('#lk-date').textContent=d.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long'});}
 function renderLock(){
   if(!lock.classList.contains('on'))return;
-  const items=notes.filter(n=>!n.done&&!n.deleted&&onList(n));
+  const items=notes.filter(n=>!n.done&&!n.deleted&&onList(n)&&atHere(n));
   {const n=items.filter(x=>!x.hold).length;$('#lk-count').textContent=n?n+' open':'';}
   const lkPrs=lockProjects(),lkNeeds=!window.OB_BUILDS?[]:ASKS.filter(a=>a.kind==='app'&&['plan','preview'].includes(askStage(a)));
   if(!items.length&&!lkPrs.length){lkList.innerHTML='<div class="lk-empty">Nothing open. Tap the button and say what needs doing.</div>';return;}
@@ -1660,7 +1671,7 @@ function lockProjectBody(p,depth=0){const box=document.createElement('div');box.
     if(po[k.id])box.appendChild(lockProjectBody(k,depth+1));}
   return box;}
 function showLock(){stopSaver();closeSheets();lock.classList.add('on');lockClock();loadEvents();
-  clearInterval(lkClockT);lkClockT=setInterval(lockClock,15000);revive();renderLock();}
+  clearInterval(lkClockT);lkClockT=setInterval(lockClock,15000);revive();renderLock();whereNow();}
 function hideLock(){lock.classList.remove('on');clearInterval(lkClockT);}
 
 let lkRec=null, lkLive=false;
