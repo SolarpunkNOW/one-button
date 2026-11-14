@@ -374,6 +374,36 @@ const PHOTO_SYS = `You look at one photo taken on a phone and say what it is and
  "sketch": {"instructions": ["each step or element the sketch asks for, as a clear sentence"]},
  "task": "if the photo is plainly something to do (a broken thing, a note to self), one task starting with a verb, else empty"}
 Only fill "receipt" for a receipt or invoice, only "sketch" for a drawing, diagram or wireframe. Numbers as numbers. Never invent prices or words you cannot read; leave them out.`;
+// A receipt's printed date, kept if it is a real date in this year or last; a misread year keeps its month and day.
+const saneDate = (d, created) => {
+  d = String(d || ""); const today = new Date(created).toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return today;
+  const y = +d.slice(0, 4), ty = +today.slice(0, 4);
+  return (y < ty - 1 || y > ty) ? today.slice(0, 4) + d.slice(4) : d;
+};
+// A fridge, cupboard or shelf: what is actually there, one entry per thing, for the Have list.
+// Nothing is stored; the phone adds what it is shown.
+const PANTRY_AISLES = "Dairy, eggs and meat | Fish | Fruit and veg | Bakery | Pantry | Drinks | Household | Toiletries and pharmacy | Hardware";
+const PANTRY_SYS = `You look at a photo of a fridge, cupboard, shelf or pantry. List the food and household stock you can actually see, one entry per thing, with a rough amount. Reply with JSON only: {"items": [{"text": "amount and thing, e.g. half a bag of rice", "aisle": "one of: ${PANTRY_AISLES}"}]}. Leave out anything you cannot make out. Never invent items.`;
+async function photoPantry(req) {
+  const buf = req.rawBody;
+  if (!buf || !buf.length) return [400, { error: "no photo", text: "No photo arrived" }];
+  if (buf.length > PHOTO_MAX) return [413, { error: "too big", text: "Photo too big (over 8 MB)" }];
+  const mime = /^image\/(jpeg|png|webp)$/.test(String(req.query.mime || "")) ? String(req.query.mime) : "image/jpeg";
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + OPENROUTER_KEY.value() },
+    body: JSON.stringify({ model: CHAT_MODEL, max_tokens: 1200, messages: [
+      { role: "system", content: PANTRY_SYS },
+      { role: "user", content: [{ type: "image_url", image_url: { url: `data:${mime};base64,${buf.toString("base64")}` } }, { type: "text", text: "What is in here?" }] }] }),
+  });
+  const d = await r.json().catch(() => ({}));
+  const seen = r.ok ? parseJSON(d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) : null;
+  const aisles = PANTRY_AISLES.split(" | ");
+  const items = (Array.isArray(seen && seen.items) ? seen.items : []).slice(0, 60)
+    .map((i) => ({ text: String((i && i.text) || "").trim().slice(0, 120), aisle: aisles.includes(i && i.aisle) ? i.aisle : "" })).filter((i) => i.text);
+  return [200, { items, text: items.length ? items.length + " things seen" : "Could not make out any food in that photo" }];
+}
 
 async function photo(req) {
   const buf = req.rawBody;
@@ -396,7 +426,7 @@ async function photo(req) {
   let out = { ...doc, text: "" };
   if (kind === "receipt" && seen.receipt) {
     const rc = seen.receipt, num = (x) => Math.max(0, Number(x) || 0);
-    const rec = { id, photo: id, created, shop: String(rc.shop || "").slice(0, 120), date: /^\d{4}-\d{2}-\d{2}$/.test(String(rc.date || "")) ? rc.date : new Date(created).toISOString().slice(0, 10),
+    const rec = { id, photo: id, created, shop: String(rc.shop || "").slice(0, 120), date: saneDate(rc.date, created),
       total: num(rc.total), currency: String(rc.currency || "").slice(0, 8), items: (Array.isArray(rc.items) ? rc.items : []).slice(0, 60).map((i) => ({ name: String((i && i.name) || "").slice(0, 120), price: num(i && i.price) })) };
     rec.month = rec.date.slice(0, 7);
     doc.receipt = rec;
@@ -976,7 +1006,7 @@ async function routed(req, res, body, sp, send, me) {
       try { send(await PERSON_ROUTES[pe[1]](body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    const ph = req.path.match(/\/photo(?:\/(list|collected|get))?$/);
+    const ph = req.path.match(/\/photo(?:\/(list|collected|get|pantry))?$/);
     if (ph) {
       try {
         if (ph[1] === "list") { send(await photoList()); return; }
@@ -989,6 +1019,7 @@ async function routed(req, res, body, sp, send, me) {
           return;
         }
         if (!(await checkRateLimit(DAILY_LIMIT, "ob_" + clientIp(req)))) { res.status(429).json({ error: "daily limit reached", text: "Daily limit reached" }); return; }
+        if (ph[1] === "pantry") { send(await photoPantry(req)); return; }
         send(await photo(req));
       } catch (e) { res.status(502).json({ error: String((e && e.message) || e), text: "Could not read the photo" }); }
       return;

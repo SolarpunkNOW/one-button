@@ -338,7 +338,6 @@
       <button class="chip" data-cat="fix">Fix</button>
       <button class="chip" data-cat="check">Check</button>
       <button class="chip" data-cat="buy">Buy</button>
-      <button class="chip" data-cat="have">Have</button>
       <button class="chip" data-cat="do">Do</button>
     </div>
     <div id="notes-list"></div>
@@ -395,7 +394,7 @@
 <div class="sheet" id="sheet-settings">
   <div class="sheet-bar"><h2>Settings</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body">
-    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="set-lockview">Lock screen view</button></div>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="set-lockview">Lock screen view</button><span class="note" id="app-build" style="margin-left:auto"></span></div>
     <div class="field" id="key-field">
       <label for="set-key">App key (browser only)</label>
       <input id="set-key" type="password" autocomplete="off" placeholder="paste the One Button key" />
@@ -729,7 +728,13 @@ async function askClaudeDirect(text,extra={}){
   if(!r.ok)throw new Error('ask '+r.status);const a=await r.json();ASKS=[a,...ASKS];LS.set('ob-asks',ASKS);renderClaude();return a;}
 // Money said out loud ("just spent 120 at the market", "record a receipt for lunch, split with
 // Simon", "add coffee to receipts for 40") goes to the accounts, not the task list.
-const SPEND_RE=/^(?:(?:i |i've |i have )?just (?:spent|paid)|record (?:a )?(?:receipt|spend|expense|payment)|add .{1,80}? to (?:the )?(?:receipts|accounts|expenses|spending)|spent|paid for|receipt for)\b/i;
+const FILLER='(?:(?:okay|ok|so|um|hey|right|and|yes|yeah|please|can you|could you|now)[, ]+){0,3}';
+const SPEND_RE=new RegExp('^'+FILLER+"(?:(?:i |i've |i have )?just (?:spent|paid)|record (?:a )?(?:receipt|spend|expense|payment)|add .{1,80}? to (?:the )?(?:receipts|accounts|expenses|spending)|spent|paid for|receipt for)\\b",'i');
+// "View my accounts", "show my receipts", "show my photos": the Photos and accounts sheet.
+const VIEW_RE=new RegExp('^'+FILLER+/(?:view|show|open|see)(?: me)?(?: my| the)? (?:accounts|receipts|spending|expenses|photos)\b/.source,'i');
+function viewSaid(t){if(!VIEW_RE.test(t))return false;hideLock();closeSheets();openSheet('#sheet-photos');renderPhotos();return true;}
+// Words that are plainly for the main brain, not a task: questions, apps, people, the calendar.
+const ACT_RE=new RegExp('^'+FILLER+/(?:play|put on|open|take me|navigate|directions|get me a ride|tell|message|text|whatsapp|ping|dm|book|schedule|what|what's|whats|how|who|when|where|why|is|are|do|does|can|could|should|which)\b/.source,'i');
 async function spendSaid(t){if(!SPEND_RE.test(t))return '';
   try{const r=await fetch(API+'/api/spend',{method:'POST',headers:obHeaders(),body:JSON.stringify({text:t})});const d=await r.json().catch(()=>({}));
     if(!r.ok)return d.text||'Could not record it';PHOTOS=null;return d.text||'Recorded';}
@@ -742,6 +747,7 @@ async function toClaude(t){
   if(FOR_CLAUDE.test(t)){try{await askClaudeDirect(t.replace(FOR_CLAUDE,'').trim()||t);return 'sent to Claude';}catch{return 'could not reach Claude, tap to try again';}}
   return '';}
 async function route(text){
+  if(viewSaid(text)){mainLive||(statusEl.textContent='tap to speak');return;}
   {const s=await spendSaid(text);if(s){mainLive||(statusEl.textContent=s);return;}}
   {const said=await toClaude(text);if(said){mainLive||(statusEl.textContent=said);return;}}
   if(RECIPE_RE.test(text)){mainLive||(statusEl.textContent='tap to speak');await suggestRecipes(text);return;}
@@ -885,7 +891,7 @@ function handle(out,original){
 
   if(out.action==='calendar'){
     rLabel.textContent='calendar'; rBody.textContent=`${out.title||'Event'}${out.start?' . '+new Date(out.start).toLocaleString():''}`;
-    addAct('Add to calendar','go',()=>location.href=gcal(out)); return;
+    addAct('Add to calendar','go',()=>{location.href=gcal(out);rLabel.textContent='calendar opened';rBody.textContent=`"${out.title||'Event'}"${out.start?' on '+new Date(out.start).toLocaleString():''} is in the calendar form. Save it there and it is done.`;rActs.innerHTML='';}); return;
   }
 
   const c=findContact(out.contact);
@@ -937,7 +943,7 @@ function gcal(o){
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(o.title||'Event')}&dates=${f(s)}/${f(e)}&details=${encodeURIComponent(o.message||'')}`;
 }
 
-let filter='all';
+let filter='all', haveView='buy'; // Buy shows the shopping list or, toggled, what is in the house
 function renderNotes(){
   renderLock();renderProjBoard();
   const list=$('#notes-list');
@@ -948,11 +954,16 @@ function renderNotes(){
   const awayNote=()=>{if(!away)return;const p=document.createElement('p');p.className='note';
     p.textContent=away+(away>1?' tasks':' task')+' for other places, hidden until you get there.';list.appendChild(p);};
   list.innerHTML='';
-  if(filter==='have'){renderHave(list,items);return;}
+  if(filter==='buy'||filter==='have'){const tg=document.createElement('div');tg.className='cat-row';tg.style.margin='0 0 10px';
+    const hv=filter==='have'||haveView==='have';
+    tg.innerHTML=`<button class="chip${hv?'':' on'}" data-bv="buy">To buy</button><button class="chip${hv?' on':''}" data-bv="have">Have at home</button>`;
+    tg.querySelectorAll('[data-bv]').forEach(b=>b.onclick=()=>{haveView=b.dataset.bv;filter='buy';renderNotes();});list.appendChild(tg);
+    if(hv){renderHave(list,notes.filter(n=>!n.done&&!n.deleted&&onList(n)&&n.cat==='have'));return;}}
   // Tasks that arrived from Claude or a conversation wait here, off the front page, until Jay
   // places each one: on the front, in a project (tap it), or gone.
   const waiting=items.filter(n=>n.hold);items=items.filter(n=>!n.hold);
-  if(waiting.length&&filter==='all'){const hd=document.createElement('div');hd.className='iv-h';hd.textContent='Decide where these go';list.appendChild(hd);
+  if(waiting.length&&filter==='all'){const hd=document.createElement('div');hd.className='iv-h';hd.textContent='Decide where these go . '+waiting.length+' waiting';hd.style.cssText='padding:8px 10px;border-left:3px solid var(--spark);background:var(--cream-2)';list.appendChild(hd);
+    const ex=document.createElement('p');ex.className='note';ex.textContent='From conversations, photos and Claude. Front page puts one on the list; tap a task to put it in a project.';list.appendChild(ex);
     for(const n of waiting){const row=noteRow(n);const b=document.createElement('button');b.className='tbtn';b.textContent='Front page';b.style.margin='0 0 8px 28px';
       b.onclick=()=>{n.hold=false;n.updated=Date.now();save();renderNotes();showToast('On the front page');};
       list.appendChild(row);list.appendChild(b);}
@@ -1264,7 +1275,7 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
   const madeHere=(OFFERS.made||[]).filter(o=>o.project===p.id);
   $('#p1-body').innerHTML=`${p.sharedFrom?`<p class="note"><b>Shared by ${escapeHtml(p.sharedFrom)}.</b> Tasks here live with them; what you add carries your name. <button class="tbtn" id="p1-leave">Leave this project</button></p>`:''}
     <button class="p1-speak" id="p1-speak">${isBuild(p)?'Speak a change to this build':'Speak to this project'}</button><div class="note" id="p1-status"></div>
-    ${!p.sharedFrom?`<div class="iv-row" style="align-items:center;margin:6px 0 10px"><input class="nd-when" id="p1-offer" placeholder="Offer to someone (their One Button name, e.g. simon)" aria-label="Offer this project to" style="flex:1"></div>
+    ${!p.sharedFrom?`<div class="iv-row" style="align-items:center;margin:6px 0 10px"><input class="nd-when" id="p1-offer" placeholder="Offer to someone (their One Button name, e.g. simon)" aria-label="Offer this project to" style="flex:1"><button class="tbtn" id="p1-offer-go">Offer</button></div><div class="note" id="p1-offer-note"></div>
       ${madeHere.length?`<p class="note">${madeHere.map(o=>escapeHtml(o.to)+': '+(o.status==='offered'?'offered, waiting':o.status)).join(' . ')}</p>`:''}`:''}
     ${pa.length?`<div class="iv-h">With Claude</div>${pa.map(askCard).join('')}`:''}
     ${p.link?`<p><a href="${escapeHtml(p.link)}" target="_blank" rel="noopener">Open ${escapeHtml(p.name)}</a></p>`:''}
@@ -1286,8 +1297,9 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
   const b=$('#p1-body');wireAskCards(b);
   if(p.sharedFrom){b.querySelectorAll('input:not(#p1-offer),textarea,[data-st],[data-pk],[data-pp],#p1-main').forEach(x=>x.disabled=true);
     $('#p1-leave').onclick=async()=>{try{await shareCall('end',{id:p.share});showToast('Left '+p.name);closeSheets();await projRefresh();syncNow();}catch(e){showToast(e.message);}};}
-  const of=$('#p1-offer');if(of)of.onchange=async()=>{const to=of.value.trim().toLowerCase();if(!to)return;
-    try{const o=await shareCall('offer',{project:p.id,to});showToast('Offered to '+o.to+'; it reaches them when they next open One Button');of.value='';await projRefresh();renderP1();}catch(e){showToast(e.message);}};
+  const of=$('#p1-offer'),og=$('#p1-offer-go');const offer=async()=>{const to=of.value.trim().toLowerCase(),nt=$('#p1-offer-note');if(!to){nt.textContent='Type their One Button name first';return;}if(!p.id){nt.textContent='Save the project first (set a status), then offer it';return;}
+    og.disabled=true;nt.textContent='Offering...';try{const o=await shareCall('offer',{project:p.id,to});showToast('Offered to '+o.to+'; it reaches them when they next open One Button');of.value='';await projRefresh();renderP1();}catch(e){nt.textContent='Could not offer it: '+(e.message||'no reply');og.disabled=false;}};
+  if(of){of.onchange=offer;og.onclick=offer;}
   $('#p1-speak').onclick=()=>speakOnce($('#p1-status'),async t=>{try{const a=await speakToProject(p,t);$('#p1-status').textContent=a.kind==='app'?'Sent. Claude will show you a plan first.':'Sent to Claude.';}catch{$('#p1-status').textContent='Could not send it';}});
   b.querySelectorAll('[data-st]').forEach(x=>x.onclick=async()=>{await projSave({...p,status:x.dataset.st});renderP1();});
   $('#p1-main').onchange=e=>projSave({...p,main:e.target.checked});
@@ -1461,10 +1473,11 @@ function rhythmFrom(t){if(!/\b(add|put)\b.*\brhythms?\b/i.test(t))return null;
  * in hist, so a task said again and again ("buy eggs") learns its own rhythm. */
 const EVERY=[[0,'Never'],[1,'Daily'],[7,'Weekly'],[30,'Monthly']];
 const DAY=864e5, dayStart=t=>{const d=new Date(t);d.setHours(0,0,0,0);return d.getTime();};
-function tick(n){const now=Date.now();n.done=true;n.doneAt=now;n.hist=[...(n.hist||[]),now].slice(-12);}
+function tick(n){const now=Date.now();n.done=true;n.doneAt=now;n.hist=[...(n.hist||[]),now].slice(-12);
+  if(n.cat==='buy'&&!n.every)try{addHave(n.text,n.aisle);}catch{}} // bought: it is in the house now
 function revive(){let changed=false;const now=Date.now();
   for(const n of notes){if(!n.every||!n.done||n.deleted||!n.doneAt)continue;
-    const back=dayStart(n.doneAt)+n.every*DAY;if(now<back)continue;
+    const back=dayStart(n.doneAt-4*36e5)+n.every*DAY;if(now<back)continue; // a tick before 4am belongs to the night before
     n.done=false;delete n.doneAt;
     const t=dueAt(n);if(t){let d=t;while(d<back)d+=n.every*DAY;const o=new Date(d);n.due=new Date(d-o.getTimezoneOffset()*6e4).toISOString().slice(0,19);}
     changed=true;}
@@ -1609,8 +1622,12 @@ $('#c-add').onclick=()=>{
   ['#c-name','#c-phone','#c-tg','#c-email'].forEach(s=>$(s).value='');
   renderContacts();
 };
+// Picked on the phone through the app's own contact picker: one person, name and number.
+window.obContactPicked=(name,phone)=>{name=String(name||'').trim();if(!name)return;const c=contacts.find(x=>x.name.toLowerCase()===name.toLowerCase());
+  if(c){if(phone&&!c.phone)c.phone=String(phone);}else contacts.push({name,phone:String(phone||''),tg:'',email:''});LS.set('ob-contacts',contacts);renderContacts();showToast(name+' added');};
 $('#c-import').onclick=async()=>{
-  if(!(navigator.contacts && navigator.contacts.select)){ showToast('Phone import works on Android Chrome'); return; }
+  if(NATIVE&&NATIVE.pickContact){try{NATIVE.pickContact();}catch{showToast('Could not open contacts');}return;}
+  if(!(navigator.contacts && navigator.contacts.select)){ showToast('Phone import works in the app (build 18 or later) or in Android Chrome'); return; }
   try{
     const picked=await navigator.contacts.select(['name','tel','email'],{multiple:true});
     let added=0;
@@ -1659,7 +1676,7 @@ function addHave(text,aisle){text=String(text||'').replace(/^(?:we|i)(?:'ve| hav
 const pantry=()=>notes.filter(n=>n.cat==='have'&&!n.done&&!n.deleted).sort((a,b)=>(a.ts||0)-(b.ts||0));
 // How long something has been in: as for tasks, but past two weeks it just says so quietly.
 const haveAge=ts=>Date.now()-ts>14*DAY?'a while ago':age(ts);
-function showCat(c){const b=$('#cat-filter [data-cat="'+c+'"]');if(b)b.click();}
+function showCat(c){if(c==='have'){haveView='have';c='buy';}else if(c==='buy')haveView='buy';const b=$('#cat-filter [data-cat="'+c+'"]');if(b)b.click();}
 // The Have list: by kind, oldest first within a kind, with the two things to do with a pantry on top.
 function renderHave(list,items){
   const bar=document.createElement('div');bar.className='iv-row';bar.style.margin='0 0 10px';
@@ -1766,10 +1783,18 @@ function renderLock(){
   // Pages made for a shared project that Jay has not yet shared with its people: a nudge until he has.
   const lkShare=document.documentElement.classList.contains('backend')?PROJ.projects.flatMap(p=>(p.links||[]).filter(l=>!l.shared&&(p.people||[]).length).map(l=>({p,l}))).slice(0,4):[];
   const lkOffers=offersForMe().slice(0,3);
-  if(lkNeeds.length||lkShare.length||lkOffers.length){const box=document.createElement('div');box.className='lk-ready';
-    box.innerHTML=`<div class="lk-ready-t">Waiting on you</div>`+lkOffers.map(offerRow).join('')+lkNeeds.map(askRow).join('')+lkShare.map(({p,l},i)=>`<div class="bl-row" style="cursor:default"><a class="bl-row-t" href="${escapeHtml(l.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Share with ${escapeHtml((p.people||[]).join(', '))}: ${escapeHtml(l.title||p.name)}</a><button class="lk-cl" data-lkshared="${i}">Shared</button></div>`).join('');
+  // Claude's answers to plain questions, until tapped Got it; and what Claude is still on.
+  const lkAns=ASKS.filter(a=>a.kind!=='app'&&a.status==='done'&&!SEEN.includes(a.id)).slice(0,3),lkWork=ASKS.filter(a=>a.kind!=='app'&&a.status!=='done'&&Date.now()-(a.created||0)<864e5).slice(0,2);
+  const lkHold=items.filter(x=>x.hold).length;
+  const ansRow=a=>`<div class="bl-row" style="cursor:default;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:0"><div class="bl-row-t">Claude: ${escapeHtml(askWords(a))}</div><div class="cl-ans" style="white-space:pre-wrap;font-size:14px;opacity:.9;margin-top:4px">${escapeHtml(String(a.answer||'').slice(0,600))}${String(a.answer||'').length>600?'...':''}</div></div><button class="lk-cl" data-lkseen="${a.id}" style="padding:8px 12px">Got it</button></div>`;
+  const workRow=a=>`<div class="bl-row" style="cursor:default"><span class="bl-row-t">Claude is on it: ${escapeHtml(askWords(a))}</span><span class="bl-row-s">working</span></div>`;
+  const holdRow=lkHold?`<button class="bl-row need" data-lkhold><span class="bl-row-t">${lkHold} task${lkHold>1?'s':''} waiting for a place</span><span class="bl-row-s">Decide</span></button>`:'';
+  if(lkNeeds.length||lkShare.length||lkOffers.length||lkAns.length||lkWork.length||lkHold){const box=document.createElement('div');box.className='lk-ready';
+    box.innerHTML=`<div class="lk-ready-t">Waiting on you</div>`+lkAns.map(ansRow).join('')+holdRow+lkOffers.map(offerRow).join('')+lkNeeds.map(askRow).join('')+lkWork.map(workRow).join('')+lkShare.map(({p,l},i)=>`<div class="bl-row" style="cursor:default"><a class="bl-row-t" href="${escapeHtml(l.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Share with ${escapeHtml((p.people||[]).join(', '))}: ${escapeHtml(l.title||p.name)}</a><button class="lk-cl" data-lkshared="${i}">Shared</button></div>`).join('');
     box.querySelectorAll('[data-lkshared]').forEach(b=>b.onclick=()=>{const {p,l}=lkShare[+b.dataset.lkshared];l.shared=true;projSave(p);renderLock();});
     wireOffers(box);
+    box.querySelectorAll('[data-lkseen]').forEach(b=>b.onclick=()=>{seeAsks([b.dataset.lkseen]);renderLock();});
+    const hb=box.querySelector('[data-lkhold]');if(hb)hb.onclick=()=>{hideLock();showCat('all');window.scrollTo(0,0);};
     wireAskCards(box);lkList.appendChild(box);}
   const open=LS.get('ob-lockopen',{});
   // First the daily rhythm, then whatever belongs to the place the phone is at, then the kinds.
@@ -1871,7 +1896,8 @@ async function lockText(t){
       lock.classList.add('busy');
       {const s=await spendSaid(t);if(s){lock.classList.remove('busy');lkSay(s);return;}}
       // "Call Simon", "ring Simon on WhatsApp": from the lock screen too, recorder first, then the call.
-      {const m=t.match(/^(?:please )?(?:call|ring|phone)\s+(.+?)(?:\s+on\s+(whatsapp|signal|telegram|the phone|phone))?[.!]?$/i);
+      if(viewSaid(t)){lock.classList.remove('busy');return;}
+      {const m=t.match(new RegExp('^'+FILLER+/(?:call|ring|phone)\s+(.+?)(?:\s+on\s+(whatsapp|signal|telegram|the phone|phone))?[.!]?$/.source,'i'));
         if(m){const c=findContact(m[1]);lock.classList.remove('busy');
           if(!c){lkSay(`I don't have "${m[1]}" yet; add them in Settings`);return;}
           const svc=/whatsapp/i.test(m[2]||'')?'whatsapp':/signal/i.test(m[2]||'')?'signal':/telegram/i.test(m[2]||'')?'telegram':'phone';
@@ -1879,13 +1905,15 @@ async function lockText(t){
           lkSay(`Calling ${c.name}${svc!=='phone'?' on '+svc:''}${NATIVE&&NATIVE.placeCall?', recording':''}`);callPerson(c,svc);return;}}
       {const said=await toClaude(t);if(said){lock.classList.remove('busy');lkSay(said);return;}}
       // Recipes need room to read: they open in the app.
-      if(RECIPE_RE.test(t)){lock.classList.remove('busy');hideLock();route(t);return;}
+      if(RECIPE_RE.test(t)||ACT_RE.test(t)){lock.classList.remove('busy');hideLock();route(t);return;}
       {const r=rhythmFrom(t);if(r){const n=addRoutine(r.text,r.every);lock.classList.remove('busy');lkSay('added to your rhythm, '+everyWord(n.every));return;}}
       lkSay('adding...');
       let arr=null;
       try{arr=parseJSON(await ask([{role:'system',content:TASKS_SYS},{role:'user',content:t}]));}catch{}
       if(!Array.isArray(arr)) arr=[{text:t,category:'do'}]; // brain unreachable: keep the words as one task
       arr=arr.filter(x=>x&&x.text);
+      // Nothing task-shaped in it: the main brain has a go (a question, an app, a person, the calendar).
+      if(!arr.length){lock.classList.remove('busy');hideLock();route(t);return;}
       const now=Date.now();
       arr.slice().reverse().forEach((x,i)=>{const t={id:now+i,text:x.text,cat:CAT[x.category]?x.category:'do',done:false,ts:now,subs:[],due:x.due||'',place:x.place||''};const ev=Number(x.every)||0;if((t.cat==='buy'||t.cat==='have')&&x.aisle&&AISLES.some(([a])=>a===x.aisle))t.aisle=x.aisle;if(ev){t.every=ev;t.everyBy='guess';}if(absorb(t))return;notes.unshift(t);noteWhere(now+i,'said',pendingFix);});
       save();renderNotes();lock.classList.remove('busy');
@@ -1893,6 +1921,12 @@ async function lockText(t){
       lkSay(!arr.length?'no task heard, tap to try again':have===arr.length?'added '+have+' to Have':'added '+arr.length+(arr.length>1?' tasks':' task'));
 }
 
+// Play a recording kept on the phone, from the recordings list. One at a time; tap again to stop.
+let IV_AUDIO=null,IV_BTN=null;
+function playIv(name,btn){if(IV_AUDIO){IV_AUDIO.pause();IV_AUDIO=null;if(IV_BTN)IV_BTN.textContent='Play';if(IV_BTN===btn){IV_BTN=null;return;}}
+  try{const a=new Audio('data:audio/mp4;base64,'+NATIVE.readInterview(name));IV_AUDIO=a;IV_BTN=btn;btn.textContent='Stop';
+    a.onended=()=>{btn.textContent='Play';IV_AUDIO=null;IV_BTN=null;};a.onerror=()=>{btn.textContent='Play';showToast('Could not play it');IV_AUDIO=null;};a.play().catch(()=>showToast('Could not play it'));}
+  catch{showToast('Could not read the recording');}}
 let intOn=false, intStart=0, intT=null, intWeb=null;
 function intTick(){const s=Math.floor((Date.now()-intStart)/1000);
   lkStatus.textContent=('listening '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+(s>=LONG_S?', a conversation':'')+', tap to stop');}
@@ -1940,9 +1974,10 @@ function renderInterviews(){
   box.innerHTML='';
   for(const f of list){
     const s=IVS[ivId(f.name)]||{}, row=document.createElement('div');row.className='note-item';
-    row.innerHTML=`<div class="ntext">${escapeHtml(s.title||ivWhen(f.ts))}<div class="nmeta">${s.title?ivWhen(f.ts)+' . ':''}${(f.size/1048576).toFixed(1)} MB${ivLabel(f)?' . '+ivLabel(f):''}</div></div><button class="tbtn">Share</button><button class="ndone" aria-label="Delete">&times;</button>`;
+    row.innerHTML=`<div class="ntext">${escapeHtml(s.title||ivWhen(f.ts))}<div class="nmeta">${s.title?ivWhen(f.ts)+' . ':''}${(f.size/1048576).toFixed(1)} MB${ivLabel(f)?' . '+ivLabel(f):''}</div></div><button class="tbtn" data-play>Play</button><button class="tbtn">Share</button><button class="ndone" aria-label="Delete">&times;</button>`;
     row.querySelector('.ntext').onclick=()=>openIv(f.name,true);
-    row.querySelector('.tbtn').onclick=()=>NATIVE.shareInterview(f.name);
+    row.querySelector('[data-play]').onclick=e=>playIv(f.name,e.target);
+    row.querySelector('.tbtn:not([data-play])').onclick=()=>NATIVE.shareInterview(f.name);
     row.querySelector('.ndone').onclick=()=>{
       if(row.dataset.sure){NATIVE.deleteInterview(f.name);renderInterviews();}
       else{row.dataset.sure='1';showToast('Tap the cross again to delete');}
@@ -2354,6 +2389,7 @@ async function renderPhotos(){const b=$('#photos-body');b.innerHTML='<p class="n
   $('#ph-take').onclick=()=>takePhoto();
   b.querySelectorAll('.ph-thumb').forEach(el=>photoInto(el,el.dataset.photo));}
 $('#open-photos').onclick=()=>{openSheet('#sheet-photos');renderPhotos();};
+$('#app-build').textContent=NATIVE?('App build '+(NATIVE.build?NATIVE.build():'17 or older')):'In a browser';
 function wireAskCards(box){
   box.querySelectorAll('[data-arow]').forEach(b=>b.onclick=()=>openAsk(ASKS.find(a=>a.id===b.dataset.arow)));const A=id=>ASKS.find(a=>a.id===id);
   box.querySelectorAll('[data-plan]').forEach(b=>b.onclick=()=>openPlan(A(b.dataset.plan)));
