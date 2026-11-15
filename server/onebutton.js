@@ -491,6 +491,49 @@ async function photoCollected(body) {
   return [200, { ok: true }];
 }
 
+/* The triage board: every task, with where it came from. A task carries `project`, `from` (the
+ * conversation it was ticked out of), `ask` (a Claude answer, which may itself come from a
+ * conversation or a photo) or `photo`. Members' tasks in shared spaces come along too. */
+async function triageData() {
+  const col = (n, lim) => listRef().collection(n).orderBy("created", "desc").limit(lim).get().then((q) => q.docs.map((d) => d.data()));
+  const [tasks, projects, ivs, asks, photos, spaces] = await Promise.all([
+    listRef().collection("tasks").get().then((q) => q.docs.map((d) => d.data()).filter((t) => !t.deleted)),
+    listRef().collection("projects").get().then((q) => q.docs.map((d) => { const p = d.data(); return { id: p.id, name: p.name, status: p.status, main: !!p.main, parent: p.parent || "" }; })),
+    col("interviews", 200).then((l) => l.map((o) => ({ id: o.id, title: o.title || o.name, created: o.created, people: o.people || [], actions: o.actions || [] }))),
+    col("asks", 300).then((l) => l.map((a) => ({ id: a.id, interview: a.interview || "", photo: a.photo || "", text: String(a.text || "").slice(0, 160), status: a.status }))),
+    col("photos", 200).then((l) => l.map((p) => ({ id: p.id, kind: p.kind || "", created: p.created, title: p.title || p.shop || "", text: String(p.text || "").slice(0, 160) }))),
+    listRef().collection("spaces").get().then((q) => q.docs.map((d) => d.data())),
+  ]);
+  // Tasks members put into shared spaces, each with the conversation it came from.
+  const spaceTasks = [];
+  for (const s of spaces) {
+    const a = s.added || {}, convs = [...((s.data && s.data.convs) || []), ...(a.convs || [])];
+    for (const t of a.tasks || []) spaceTasks.push({ ...t, space: s.slug, spaceName: s.name, convTitle: (convs.find((c) => c.id === t.from) || {}).title || "" });
+  }
+  return { tasks, projects, interviews: ivs, asks, photos, spaceTasks, now: Date.now() };
+}
+// Older tasks that were ticked out of a conversation before `from` was recorded: match their
+// words to that conversation's actions and link them. Only fills gaps, never changes a link.
+async function triageApply() {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const ivs = (await listRef().collection("interviews").get()).docs.map((d) => d.data());
+  const byText = new Map();
+  for (const iv of ivs) for (const a of iv.actions || []) { const k = norm(a && a.text); if (k && !byText.has(k)) byText.set(k, iv.id); }
+  const asks = new Map((await listRef().collection("asks").get()).docs.map((d) => [d.id, d.data()]));
+  const tasks = (await listRef().collection("tasks").get()).docs.map((d) => d.data()).filter((t) => !t.deleted && !t.from && !t.photo);
+  const batch = admin.firestore().batch();
+  let n = 0;
+  for (const t of tasks) {
+    const a = t.ask ? asks.get(t.ask) : null;
+    const from = (a && a.interview) || byText.get(norm(t.text)) || "", photo = (a && a.photo) || "";
+    if (!from && !photo) continue;
+    batch.update(listRef().collection("tasks").doc(String(t.id)), { ...(from ? { from } : {}), ...(photo ? { photo } : {}) });
+    if (++n >= 400) break;
+  }
+  if (n) await batch.commit();
+  return { linked: n };
+}
+
 // Phone: every interview's note (no transcripts) and every Ask Claude request.
 async function ivList() {
   const ivs = (await listRef().collection("interviews").orderBy("created", "desc").limit(60).get()).docs
@@ -1144,6 +1187,11 @@ async function routed(req, res, body, sp, send, me) {
     const sh = req.path.match(/\/share\/(offer|list|answer|end)$/);
     if (sh) {
       try { send(await SHARE_ROUTES[sh[1]](body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
+    const tg = req.path.match(/\/triage\/(data|apply)$/);
+    if (tg) {
+      try { send(tg[1] === "data" ? await triageData() : await triageApply()); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
     const pr = req.path.match(/\/project\/(list|save)$/);

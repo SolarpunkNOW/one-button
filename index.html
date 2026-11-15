@@ -1109,7 +1109,8 @@ function renderAlarms(){
         <span style="display:flex;gap:6px;width:100%;flex-wrap:wrap"><span class="al-due" style="align-self:center">Remind me in</span>
         ${[10,20,30].map(m=>`<button class="tbtn" data-al-snz="${i}" data-m="${m}">${m} min</button>`).join('')}<button class="tbtn" data-al-done="${i}">Done</button></span>
         ${left.length?`<span class="al-due" style="width:100%">Still to come: ${left.map(m=>`<button class="tbtn" data-al-drop="${i}" data-m="${m}">${m} min before</button>`).join(' ')} (tap to drop)</span>`:''}</div>`;}).join('');
-    box.querySelectorAll('[data-al-snz]').forEach(b=>b.onclick=()=>{const r=rows[+b.dataset.alSnz];r.n.alarmSeen=Date.now();r.n.snooze=Date.now()+(+b.dataset.m)*6e4;save();showToast('Reminding you in '+b.dataset.m+' minutes');});
+    // Delaying an alarm silences the one ringing now: the tone stops at once and the list is redrawn without it.
+    box.querySelectorAll('[data-al-snz]').forEach(b=>b.onclick=()=>{const r=rows[+b.dataset.alSnz];r.n.alarmSeen=Date.now();r.n.snooze=Date.now()+(+b.dataset.m)*6e4;alarmTone(false);save();syncAlarms();showToast('Reminding you in '+b.dataset.m+' minutes');});
     box.querySelectorAll('[data-al-drop]').forEach(b=>b.onclick=()=>{const r=rows[+b.dataset.alDrop];r.n.remind=ladderOf(r.n).filter(m=>m!==+b.dataset.m);save();});
     box.querySelectorAll('[data-al-done]').forEach(b=>b.onclick=()=>{const r=rows[+b.dataset.alDone];tick(r.n);noteWhere(r.n.id,'done',fixNow());save();renderNotes();});}
 }
@@ -1242,11 +1243,16 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   box.innerHTML=`<div class="pb-top"><span class="sec-lbl">Projects</span><button class="tbtn" id="pb-all">Add or sort</button></div>`
     +(tops.length?cats.map(c=>`<div class="pb-cat">${escapeHtml(c||'No category yet')}</div>`+tops.filter(p=>(p.kind||'')===c).sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name)).map(p=>row(p,0)).join('')).join('')
       :'<p class="note">No projects yet. Tap Add or sort.</p>')
+    +triageCard()
     +'<div class="pb-cat" style="margin-top:26px">Tasks</div>';
   box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{po[x.dataset.pb]=!po[x.dataset.pb];LS.set('ob-mainproj',po);renderProjBoard();});
+  const tc=$('#pb-triage');if(tc)tc.onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent='Task triage';$('#sp-frame').src='/triage.html';};
   box.querySelectorAll('[data-pb]').forEach(x=>holdToOpen(x,PROJ.projects.find(q=>q.id===x.dataset.pb)));
   box.querySelectorAll('[data-pbb]').forEach(x=>projExtra(PROJ.projects.find(q=>q.id===x.dataset.pbb),x,true));
   $('#pb-all').onclick=()=>$('#open-proj').click();}
+// The triage card: every task by project, by conversation and by photo, on one board.
+function triageCard(){const live=notes.filter(n=>!n.done&&!n.deleted),conv=live.filter(n=>n.from||n.ask).length,ph=live.filter(n=>n.photo).length,wait=live.filter(n=>n.hold).length;
+  return `<div class="pb-cat" style="margin-top:26px">Triage</div><button class="pb-row" id="pb-triage"><span>Task triage</span><small>${live.length} open${conv?' . '+conv+' from conversations':''}${ph?' . '+ph+' from photos':''}${wait?' . '+wait+' waiting':''}</small></button>`;}
 function renderProj(){const box=$('#proj-list');
   const live=PROJ.projects.filter(projLive),rest=PROJ.projects.filter(p=>!projLive(p));
   const conv=PROJ.proposed.filter(p=>p.source==='conversation'),asks=PROJ.proposed.filter(p=>p.source==='claude'),gard=PROJ.proposed.filter(p=>p.source==='garden');

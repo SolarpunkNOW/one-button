@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#FFFFFF" />
+<title>Task Triage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Mycelial Minimalism, same as One Button: white paper, ink, spark accent, hairlines, square corners. */
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:720px;margin:0 auto;padding:0 16px 64px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
+  .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 28px/1.1 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:8px 0 6px}
+  .lede{color:var(--muted);margin:0 0 14px;font-size:15px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 18px}
+  .chip{font:600 13px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--ink);padding:8px 12px;min-height:40px;cursor:pointer;border-radius:0}
+  .chip.on{background:var(--ink);color:var(--paper)}
+  .group{border-top:1px solid var(--ink);padding:10px 0 4px;margin-top:18px}
+  .group h2{font:700 17px "Inter Tight",sans-serif;margin:0;letter-spacing:-.01em}
+  .group .tag{display:block;margin-top:2px}
+  .task{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+  .task input[type=checkbox]{width:22px;height:22px;margin-top:1px;accent-color:var(--ink);flex:none}
+  .task .t{flex:1;min-width:0}
+  .task .t .tag{display:block;margin-top:3px}
+  .task.done .t{color:var(--muted);text-decoration:line-through}
+  .task.hold{border-left:3px solid var(--spark);padding-left:10px}
+  .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  select,button.sm{font:500 13px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--line);padding:6px 8px;min-height:34px;border-radius:0;max-width:100%}
+  button.sm{border-color:var(--ink);cursor:pointer}
+  button.sm:hover{background:var(--surface)}
+  .note{color:var(--muted);font-size:14px}
+  .empty{color:var(--muted);padding:12px 0}
+  #say{position:sticky;bottom:0;background:var(--spark);padding:8px 12px;font-size:14px;margin-top:20px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag">Task triage</span></div>
+  <h1>Every task, and where it came from</h1>
+  <p class="lede" id="lede">Loading your tasks.</p>
+  <div class="chips" id="chips">
+    <button class="chip on" data-v="project">By project</button>
+    <button class="chip" data-v="conv">By conversation</button>
+    <button class="chip" data-v="photo">By photo</button>
+    <button class="chip" data-v="hold">Waiting</button>
+    <button class="chip" data-v="none">Unplaced</button>
+  </div>
+  <p class="note" id="link-note" class="hidden"></p>
+  <div id="board"></div>
+  <div id="say" class="hidden"></div>
+</div>
+
+<script>
+/* Opens inside the app (the app hands over its key) or on its own with the key this browser
+   keeps. Every change goes through the same sync the app uses, latest change wins, so the
+   main screen and the lock screen pick it up within a minute. */
+const $=s=>document.querySelector(s);
+const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
+function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}
+  try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+const KEY=appKey();
+const post=(route,body)=>fetch(API+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':KEY},body:JSON.stringify(body||{})})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))));
+let D=null,VIEW='project',SHOW_DONE=false;
+const say=t=>{const s=$('#say');s.textContent=t;s.classList.toggle('hidden',!t);};
+const when=ts=>ts?new Date(ts).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'';
+
+function load(){
+  if(!KEY){$('#lede').textContent='Open this from the One Button app, or paste your key in the app\'s Settings first.';return;}
+  return post('triage/data').then(d=>{D=d;render();}).catch(e=>{$('#lede').textContent='Could not load: '+e.message;});
+}
+// Where a task came from, as the board groups it.
+function sourceOf(t){
+  const ask=t.ask?D.asks.find(a=>a.id===t.ask):null;
+  const iv=t.from||(ask&&ask.interview)||'', ph=t.photo||(ask&&ask.photo)||'';
+  return {iv,ph,ask};
+}
+const ivOf=id=>D.interviews.find(i=>i.id===id);
+const phOf=id=>D.photos.find(p=>p.id===id);
+const projOf=id=>D.projects.find(p=>p.id===id);
+function meta(t){
+  const s=sourceOf(t),bits=[];
+  if(t.hold)bits.push('waiting');
+  if(t.due)bits.push('due '+esc(t.due).slice(0,16));
+  if(t.place)bits.push(esc(t.place));
+  if(t.project&&projOf(t.project))bits.push('in '+esc(projOf(t.project).name));
+  if(s.iv&&ivOf(s.iv))bits.push('from '+esc(ivOf(s.iv).title));
+  if(s.ph)bits.push('from a photo'+(phOf(s.ph)&&phOf(s.ph).kind?' ('+esc(phOf(s.ph).kind)+')':''));
+  if(s.ask&&!s.iv&&!s.ph)bits.push('from Claude');
+  if(t.sharedFrom)bits.push('shared by '+esc(t.sharedFrom));
+  return bits.join(' . ');
+}
+function row(t){
+  const opts=['<option value="">No project</option>'].concat(D.projects.filter(p=>!/Done|Dropped/.test(p.status||'')).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${esc(p.id)}" ${p.id===t.project?'selected':''}>${esc(p.name)}</option>`)).join('');
+  return `<div class="task${t.done?' done':''}${t.hold?' hold':''}" data-id="${esc(t.id)}">
+    <input type="checkbox" ${t.done?'checked':''} data-done aria-label="Done">
+    <div class="t">${esc(t.text)}<span class="tag">${meta(t)}</span>
+      <div class="acts"><select data-proj aria-label="Project">${opts}</select>${t.hold?'<button class="sm" data-front>Front page</button>':'<button class="sm" data-wait>Not now</button>'}</div></div></div>`;
+}
+function spaceRow(t){
+  return `<div class="task" data-space="1"><input type="checkbox" ${t.done?'checked':''} disabled aria-label="Done"><div class="t">${esc(t.text)}<span class="tag">${[t.who==='jay'?'for Jay':t.who==='both'?'for both':'for '+esc(t.who),'added by '+esc(t.by||''),t.convTitle?'from '+esc(t.convTitle):'','in the space with '+esc(t.spaceName||t.space)].filter(Boolean).join(' . ')}</span></div></div>`;
+}
+function group(title,sub,items,extra){
+  if(!items.length&&!extra)return '';
+  return `<div class="group"><h2>${esc(title)}</h2>${sub?`<span class="tag">${sub}</span>`:''}${items.map(row).join('')}${extra||''}${items.length||extra?'':'<p class="empty">Nothing here.</p>'}</div>`;
+}
+function render(){
+  const all=D.tasks.filter(t=>SHOW_DONE||!t.done);
+  const n=D.tasks.filter(t=>!t.done).length,h=D.tasks.filter(t=>!t.done&&t.hold).length;
+  $('#lede').textContent=`${n} open task${n===1?'':'s'}${h?', '+h+' waiting to be placed':''}. Tick, move or park each one; the app follows within a minute.`;
+  let html='';
+  if(VIEW==='project'){
+    const byP=new Map();for(const t of all)if(t.project)(byP.get(t.project)||byP.set(t.project,[]).get(t.project)).push(t);
+    for(const p of D.projects.sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name))){const ts=byP.get(p.id)||[];if(ts.length)html+=group(p.name,esc(p.status||'')+(p.main?' . on the main screen':''),ts);}
+    const sp=D.spaceTasks.filter(t=>!t.done);
+    html+=group('In no project yet','',all.filter(t=>!t.project));
+    if(sp.length)html+=`<div class="group"><h2>In shared spaces</h2><span class="tag">Members' tasks live in the space, not on your list</span>${sp.map(spaceRow).join('')}</div>`;
+  }else if(VIEW==='conv'){
+    const byC=new Map();for(const t of all){const s=sourceOf(t);if(s.iv)(byC.get(s.iv)||byC.set(s.iv,[]).get(s.iv)).push(t);}
+    for(const iv of D.interviews){const ts=byC.get(iv.id)||[];const sp=D.spaceTasks.filter(t=>!t.done&&t.convTitle===iv.title);
+      // Actions in the note that were never ticked into the list wait here, one tap to add.
+      const taken=new Set(ts.map(t=>t.text.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()));
+      const un=(iv.actions||[]).filter(a=>a&&a.text&&!taken.has(String(a.text).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()));
+      const extra=(un.length?`<div class="acts" style="margin-top:10px">${un.map((a,i)=>`<button class="sm" data-add="${esc(iv.id)}|${i}">+ ${esc(a.text)}</button>`).join('')}</div><p class="note" style="margin:6px 0 0">Suggested in the conversation, not on your list yet.</p>`:'')+sp.map(spaceRow).join('');
+      if(ts.length||un.length||sp.length)html+=group(iv.title||'Conversation',when(iv.created)+((iv.people||[]).length?' . with '+esc(iv.people.join(', ')):''),ts,extra);}
+    const orphans=D.spaceTasks.filter(t=>!t.done&&!D.interviews.some(i=>i.title===t.convTitle));
+    if(orphans.length)html+=`<div class="group"><h2>Recorded by members</h2><span class="tag">From conversations members put into their space</span>${orphans.map(spaceRow).join('')}</div>`;
+  }else if(VIEW==='photo'){
+    const byPh=new Map();for(const t of all){const s=sourceOf(t);if(s.ph)(byPh.get(s.ph)||byPh.set(s.ph,[]).get(s.ph)).push(t);}
+    for(const p of D.photos){const ts=byPh.get(p.id)||[];if(ts.length)html+=group(p.title||p.text||'Photo',[p.kind,when(p.created)].filter(Boolean).join(' . '),ts);}
+    if(!html)html='<p class="empty">No task has come from a photo yet. A receipt, a sketch or a thing to fix, photographed in the app, lands here.</p>';
+  }else if(VIEW==='hold'){
+    html=group('Waiting to be placed','Front page puts one on the list; pick a project to file it',all.filter(t=>t.hold));
+  }else{
+    html=group('No project, no conversation, no photo','Typed or spoken straight in',all.filter(t=>!t.project&&!sourceOf(t).iv&&!sourceOf(t).ph));
+  }
+  const dn=D.tasks.filter(t=>t.done).length;
+  html+=`<p class="note" style="margin-top:24px"><button class="sm" id="toggle-done">${SHOW_DONE?'Hide':'Show'} done (${dn})</button> <button class="sm" id="relink">Link old tasks to their conversations</button></p>`;
+  $('#board').innerHTML=html||'<p class="empty">Nothing here.</p>';
+  wire();
+}
+function change(t,patch){Object.assign(t,patch,{updated:Date.now()});say('Saving…');
+  return post('sync',{changes:[t]}).then(()=>{say('');}).catch(e=>say('Not saved: '+e.message));}
+function wire(){
+  document.querySelectorAll('.task[data-id]').forEach(el=>{const t=D.tasks.find(x=>String(x.id)===el.dataset.id);if(!t)return;
+    el.querySelector('[data-done]').onchange=e=>{change(t,{done:e.target.checked,doneAt:e.target.checked?Date.now():0}).then(render);};
+    el.querySelector('[data-proj]').onchange=e=>{change(t,{project:e.target.value,hold:false}).then(render);};
+    const f=el.querySelector('[data-front]');if(f)f.onclick=()=>change(t,{hold:false}).then(render);
+    const w=el.querySelector('[data-wait]');if(w)w.onclick=()=>change(t,{hold:true}).then(render);});
+  document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{const [iv,i]=b.dataset.add.split('|');const a=(ivOf(iv).actions||[])[+i];if(!a)return;
+    const now=Date.now();const t={id:String(now),text:String(a.text),cat:'do',done:false,ts:now,updated:now,subs:[],due:a.due||'',place:'',from:iv,hold:true};
+    D.tasks.push(t);change(t,{}).then(render);});
+  const td=$('#toggle-done');if(td)td.onclick=()=>{SHOW_DONE=!SHOW_DONE;render();};
+  const rl=$('#relink');if(rl)rl.onclick=()=>{rl.disabled=true;say('Linking…');post('triage/apply').then(r=>{say(r.linked?'Linked '+r.linked+' task'+(r.linked===1?'':'s')+' to where they came from.':'Everything that could be linked already is.');return load();}).catch(e=>say('Could not link: '+e.message));};
+}
+document.querySelectorAll('#chips .chip').forEach(c=>c.onclick=()=>{VIEW=c.dataset.v;document.querySelectorAll('#chips .chip').forEach(x=>x.classList.toggle('on',x===c));if(D)render();});
+// First open: link what older tasks can be linked, then show the board. Later opens just show it.
+const first=(()=>{try{return !localStorage.getItem('ob-triage-linked');}catch(e){return false;}})();
+(first&&KEY?post('triage/apply').then(()=>{try{localStorage.setItem('ob-triage-linked','1');}catch(e){}}).catch(()=>{}):Promise.resolve()).then(load);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&D)load();});
+</script>
+</body>
+</html>

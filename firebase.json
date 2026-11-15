@@ -15,6 +15,7 @@
       { "source": "/api/space/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/shop/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/project/**", "function": "oneButton", "region": "us-central1" },
+      { "source": "/api/triage/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/person/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/clip", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/spend", "function": "oneButton", "region": "us-central1" },
