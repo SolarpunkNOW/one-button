@@ -351,7 +351,7 @@ async function clip(req) {
   if (!Array.isArray(arr) || !arr.length) arr = [{ text: t, category: "do" }]; // brain unreachable: keep the words as one task
   const now = Date.now(), batch = admin.firestore().batch(), made = [];
   arr.filter((x) => x && x.text).slice(0, 20).forEach((x, i) => {
-    const task = cleanTask({ id: String(now + i), text: String(x.text), cat: ["fix", "check", "buy", "do"].includes(x.category) ? x.category : "do", done: false, ts: now + i, updated: now + i, subs: [], due: String(x.due || ""), place: String(x.place || ""), from: "button" });
+    const task = cleanTask({ id: String(now + i), text: String(x.text), cat: ["fix", "check", "buy", "do"].includes(x.category) ? x.category : "do", done: false, ts: now + i, updated: now + i, subs: [], due: String(x.due || ""), place: x.category === "buy" ? "" : String(x.place || ""), from: "button" });
     const ev = Number(x.every) || 0; if (ev) { task.every = ev; task.everyBy = "guess"; }
     batch.set(listRef().collection("tasks").doc(task.id), task); made.push(task.text);
   });
