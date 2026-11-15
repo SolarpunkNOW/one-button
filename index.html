@@ -964,12 +964,31 @@ function renderNotes(){
     if(hv){renderHave(list,notes.filter(n=>!n.done&&!n.deleted&&onList(n)&&n.cat==='have'));return;}}
   // Tasks that arrived from Claude or a conversation wait here, off the front page, until Jay
   // places each one: on the front, in a project (tap it), or gone.
-  const waiting=items.filter(n=>n.hold);items=items.filter(n=>!n.hold);
-  if(waiting.length&&filter==='all'){const hd=document.createElement('div');hd.className='iv-h';hd.textContent='Decide where these go . '+waiting.length+' waiting';hd.style.cssText='padding:8px 10px;border-left:3px solid var(--spark);background:var(--cream-2)';list.appendChild(hd);
-    const ex=document.createElement('p');ex.className='note';ex.textContent='From conversations, photos and Claude. Front page puts one on the list; tap a task to put it in a project.';list.appendChild(ex);
-    for(const n of waiting){const row=noteRow(n);const b=document.createElement('button');b.className='tbtn';b.textContent='Front page';b.style.margin='0 0 8px 28px';
-      b.onclick=()=>{n.hold=false;n.updated=Date.now();save();renderNotes();showToast('On the front page');};
-      list.appendChild(row);list.appendChild(b);}
+  // Triage: every task that arrived in the last three days, or is still waiting for a place,
+  // grouped by where it came from (project, conversation, photo, or said straight in), each with
+  // its sorting right under it. Placing one (Front page, a project, Drop) moves it out.
+  const FRESH=3*864e5,now3=Date.now();
+  const triage=items.filter(n=>n.hold||(!n.triaged&&!n.every&&(n.ts||0)>now3-FRESH));items=items.filter(n=>!triage.includes(n));
+  if(triage.length&&filter==='all'){
+    const askOf=n=>n.ask?ASKS.find(a=>a.id===n.ask):null;
+    const srcOf=n=>{const a=askOf(n);if(n.project&&PROJ.projects.find(p=>p.id===n.project))return ['p:'+n.project,PROJ.projects.find(p=>p.id===n.project).name];
+      const iv=n.from||(a&&a.interview)||'';if(iv)return ['c:'+iv,(IVS[iv]&&IVS[iv].title)||(IVS[iv+'.m4a']&&IVS[iv+'.m4a'].title)||'A conversation'];
+      const ph=n.photo||(a&&a.photo)||'';if(ph)return ['i:'+ph,'From a photo'];
+      if(a)return ['a:'+a.id,'Claude: '+askWords(a)];return ['s','Said straight in'];};
+    const groups=new Map();for(const n of triage){const [k,label]=srcOf(n);(groups.get(k)||groups.set(k,{label,kind:k[0],ns:[]}).get(k)).ns.push(n);}
+    const order={p:0,c:1,i:2,a:3,s:4},kindLabel={p:'Project',c:'Conversation',i:'Photo',a:'Claude',s:'Spoken'};
+    const hd=document.createElement('div');hd.className='iv-h';hd.textContent='Triage . '+triage.length+' to place';hd.style.cssText='padding:8px 10px;border-left:3px solid var(--spark);background:var(--cream-2)';list.appendChild(hd);
+    const live=PROJ.projects.filter(projLive);
+    for(const g of [...groups.values()].sort((a,b)=>order[a.kind]-order[b.kind]||a.label.localeCompare(b.label))){
+      const gh=document.createElement('div');gh.className='nmeta';gh.style.cssText='margin:12px 0 2px;font-weight:600';gh.textContent=kindLabel[g.kind]+' . '+g.label;list.appendChild(gh);
+      for(const n of g.ns){const row=noteRow(n);list.appendChild(row);
+        const acts=document.createElement('div');acts.className='cat-row';acts.style.cssText='margin:0 0 10px 28px;gap:6px;align-items:center';
+        const place=(patch,msg)=>{Object.assign(n,patch,{triaged:true,updated:Date.now()});save();renderNotes();showToast(msg);};
+        acts.innerHTML=`<button class="tbtn" data-tr-front>Front page</button><select class="chip" data-tr-proj aria-label="Project" style="max-width:46%"><option value="">Project...</option>${live.map(p=>`<option value="${p.id}" ${n.project===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select><button class="tbtn" data-tr-drop>Drop</button>`;
+        acts.querySelector('[data-tr-front]').onclick=()=>place({hold:false},'On the front page');
+        acts.querySelector('[data-tr-proj]').onchange=e=>{if(e.target.value)place({project:e.target.value,hold:false},'Filed in '+e.target.selectedOptions[0].textContent);};
+        acts.querySelector('[data-tr-drop]').onclick=()=>place({deleted:true},'Dropped');
+        list.appendChild(acts);}}
     const hd2=document.createElement('div');hd2.className='iv-h';hd2.style.marginTop='18px';hd2.textContent='On the front page';list.appendChild(hd2);}
   // The projects ticked for the main screen come first, each with its own to-dos under it;
   // everything else follows by kind of action.
@@ -1246,16 +1265,11 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   box.innerHTML=`<div class="pb-top"><span class="sec-lbl">Projects</span><button class="tbtn" id="pb-all">Add or sort</button></div>`
     +(tops.length?cats.map(c=>`<div class="pb-cat">${escapeHtml(c||'No category yet')}</div>`+tops.filter(p=>(p.kind||'')===c).sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name)).map(p=>row(p,0)).join('')).join('')
       :'<p class="note">No projects yet. Tap Add or sort.</p>')
-    +triageCard()
     +'<div class="pb-cat" style="margin-top:26px">Tasks</div>';
   box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{po[x.dataset.pb]=!po[x.dataset.pb];LS.set('ob-mainproj',po);renderProjBoard();});
-  const tc=$('#pb-triage');if(tc)tc.onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent='Task triage';$('#sp-frame').src='/triage.html';};
   box.querySelectorAll('[data-pb]').forEach(x=>holdToOpen(x,PROJ.projects.find(q=>q.id===x.dataset.pb)));
   box.querySelectorAll('[data-pbb]').forEach(x=>projExtra(PROJ.projects.find(q=>q.id===x.dataset.pbb),x,true));
   $('#pb-all').onclick=()=>$('#open-proj').click();}
-// The triage card: every task by project, by conversation and by photo, on one board.
-function triageCard(){const live=notes.filter(n=>!n.done&&!n.deleted),conv=live.filter(n=>n.from||n.ask).length,ph=live.filter(n=>n.photo).length,wait=live.filter(n=>n.hold).length;
-  return `<div class="pb-cat" style="margin-top:26px">Triage</div><button class="pb-row" id="pb-triage"><span>Task triage</span><small>${live.length} open${conv?' . '+conv+' from conversations':''}${ph?' . '+ph+' from photos':''}${wait?' . '+wait+' waiting':''}</small></button>`;}
 function renderProj(){const box=$('#proj-list');
   const live=PROJ.projects.filter(projLive),rest=PROJ.projects.filter(p=>!projLive(p));
   const conv=PROJ.proposed.filter(p=>p.source==='conversation'),asks=PROJ.proposed.filter(p=>p.source==='claude'),gard=PROJ.proposed.filter(p=>p.source==='garden');

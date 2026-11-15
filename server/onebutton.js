@@ -136,7 +136,7 @@ async function shopSource(body) {
 // Tasks live as lists, one per person; the key says whose. Open routes (a shared space read
 // with a Weave token) fall back to Jay's.
 const ID_RE_T = /^[\w-]{1,80}$/;
-const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by"];
+const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by", "triaged"];
 
 function cleanTask(t) {
   const o = { id: String(t.id) };
