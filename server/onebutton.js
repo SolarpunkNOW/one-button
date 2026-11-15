@@ -1194,11 +1194,6 @@ async function routed(req, res, body, sp, send, me) {
       try { send(await SHARE_ROUTES[sh[1]](body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    const tg = req.path.match(/\/triage\/(data|apply)$/);
-    if (tg) {
-      try { send(tg[1] === "data" ? await triageData() : await triageApply()); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
-      return;
-    }
     const pr = req.path.match(/\/project\/(list|save)$/);
     if (pr) {
       try { send(pr[1] === "list" ? await projList() : await projSave(body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }

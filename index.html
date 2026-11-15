@@ -1826,8 +1826,10 @@ function renderLock(){
   const ansRow=a=>`<div class="bl-row" style="cursor:default;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:0"><div class="bl-row-t">Claude: ${escapeHtml(askWords(a))}</div><div class="cl-ans" style="white-space:pre-wrap;font-size:14px;opacity:.9;margin-top:4px">${escapeHtml(String(a.answer||'').slice(0,600))}${String(a.answer||'').length>600?'...':''}</div></div><button class="lk-cl" data-lkseen="${a.id}" style="padding:8px 12px">Got it</button></div>`;
   const workRow=a=>`<div class="bl-row" style="cursor:default"><span class="bl-row-t">Claude is on it: ${escapeHtml(askWords(a))}</span><span class="bl-row-s">working</span></div>`;
   const holdRow=lkHold?`<button class="bl-row need" data-lkhold><span class="bl-row-t">${lkHold} task${lkHold>1?'s':''} waiting for a place</span><span class="bl-row-s">Decide</span></button>`:'';
-  if(lkNeeds.length||lkShare.length||lkOffers.length||lkAns.length||lkWork.length||lkHold){const box=document.createElement('div');box.className='lk-ready';
-    box.innerHTML=`<div class="lk-ready-t">Waiting on you</div>`+lkAns.map(ansRow).join('')+holdRow+lkOffers.map(offerRow).join('')+lkNeeds.map(askRow).join('')+lkWork.map(workRow).join('')+lkShare.map(({p,l},i)=>`<div class="bl-row" style="cursor:default"><a class="bl-row-t" href="${escapeHtml(l.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Share with ${escapeHtml((p.people||[]).join(', '))}: ${escapeHtml(l.title||p.name)}</a><button class="lk-cl" data-lkshared="${i}">Shared</button></div>`).join('');
+  // Claude's answers live in the Claude strip and tasks waiting for a place live in Triage, so
+  // neither repeats here. This card only carries what needs a decision from Jay right now.
+  if(lkNeeds.length||lkShare.length||lkOffers.length||lkWork.length){const box=document.createElement('div');box.className='lk-ready';
+    box.innerHTML=`<div class="lk-ready-t">Waiting on you</div>`+lkOffers.map(offerRow).join('')+lkNeeds.map(askRow).join('')+lkWork.map(workRow).join('')+lkShare.map(({p,l},i)=>`<div class="bl-row" style="cursor:default"><a class="bl-row-t" href="${escapeHtml(l.url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Share with ${escapeHtml((p.people||[]).join(', '))}: ${escapeHtml(l.title||p.name)}</a><button class="lk-cl" data-lkshared="${i}">Shared</button></div>`).join('');
     box.querySelectorAll('[data-lkshared]').forEach(b=>b.onclick=()=>{const {p,l}=lkShare[+b.dataset.lkshared];l.shared=true;projSave(p);renderLock();});
     wireOffers(box);
     box.querySelectorAll('[data-lkseen]').forEach(b=>b.onclick=()=>{seeAsks([b.dataset.lkseen]);renderLock();});
@@ -2567,8 +2569,11 @@ function checkUpdate(){
     if(VER_SEEN===null)VER_SEEN=v.web||'';
     const mine=NATIVE&&NATIVE.build?NATIVE.build():0;
     let text='',go=null;
-    if(mine&&v.android>mine){text='App update: build '+v.android+' is out, you have '+mine+'. Tap to install.';go=()=>{location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
-    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='Update available. Tap to refresh One Button.';go=()=>location.reload();}
+    // A newer phone build: the app downloads it and opens the installer itself when it can;
+    // older builds go straight to the file on GitHub in the browser, then open the download.
+    if(mine&&v.android>mine){text='Build '+v.android+' is ready, you have '+mine+'. Tap to install.';
+      go=()=>{if(NATIVE.installUpdate){NATIVE.installUpdate();showToast('Downloading build '+v.android+'. The installer opens when it is down.');}else location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
+    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='A newer One Button page is live. Tap to reload.';go=()=>location.reload();}
     for(const b of [$('#lk-upd'),$('#set-upd')]){if(!b)continue;b.textContent=text;b.hidden=!text;b.classList.toggle('hidden',!text);b.onclick=go;}
   }).catch(()=>{});
 }
