@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#FFFFFF" />
+<title>What One Button Can Do</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Mycelial Minimalism, same as One Button: white paper, ink, spark accent, hairlines, square corners. */
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:720px;margin:0 auto;padding:0 16px 64px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
+  .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 28px/1.1 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:8px 0 6px}
+  .lede{color:var(--muted);margin:0 0 10px;font-size:15px}
+  h2{font:700 18px "Inter Tight",sans-serif;margin:30px 0 4px;letter-spacing:-.01em;border-top:1px solid var(--ink);padding-top:12px}
+  dl{margin:0}
+  dt{font-weight:600;margin-top:12px}
+  dt .say{font-family:"IBM Plex Mono",monospace;font-size:13px;background:var(--surface);padding:1px 6px}
+  dd{margin:2px 0 0;color:var(--muted);font-size:15px}
+  .toc{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+  .toc a{font:600 13px "Inter",sans-serif;color:var(--ink);border:1px solid var(--ink);padding:7px 10px;text-decoration:none}
+  .note{color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag">Cheat sheet</span></div>
+  <h1>What One Button can do</h1>
+  <p class="lede">One button, pressed and spoken to. Everything below grows from that press.</p>
+  <div class="toc">
+    <a href="#button">The button</a><a href="#lock">Lock screen</a><a href="#conv">Conversations</a><a href="#spaces">Shared spaces</a>
+    <a href="#projects">Projects</a><a href="#triage">Task triage</a><a href="#photos">Photos and accounts</a><a href="#claude">Claude</a><a href="#settings">Settings</a><a href="#phone">The phone app</a>
+  </div>
+
+  <h2 id="button">The button</h2>
+  <dl>
+    <dt>Tap, speak, tap again</dt><dd>Short words become tasks, sorted into fix, check, buy or do, with the time, place and person you named. Several things in one breath become several tasks.</dd>
+    <dt><span class="say">buy</span> and <span class="say">have</span></dt><dd>Shopping goes under To buy. Say what you already have and it sits under Have at home, so the list knows what not to buy.</dd>
+    <dt>Times and places by voice</dt><dd>"Tomorrow at nine", "when I am at the market". Places are learned from where you tick things off, never typed in as coordinates.</dd>
+    <dt>Alarms</dt><dd>A task with a time rings, loud, on the phone and from the page. Delay it for ten, twenty or thirty minutes, or mark it done, from the alarm itself.</dd>
+    <dt><span class="say">Claude, ...</span></dt><dd>Anything said to Claude becomes an ask. Questions get answers; tasks Claude proposes wait under Decide where these go until you place them.</dd>
+    <dt><span class="say">Just spent ...</span> or <span class="say">record a receipt for ...</span></dt><dd>Goes straight into your accounts: shop, what, how much, who it was split with.</dd>
+    <dt>Hold the button for the camera</dt><dd>A receipt is read into accounts. A sketch becomes a plan. A thing to fix becomes a task with the photo attached. A photo of the pantry updates Have at home.</dd>
+    <dt>A long recording</dt><dd>Over about a minute, the button stops sorting and keeps the whole thing as a conversation, written up for you (see Conversations).</dd>
+  </dl>
+
+  <h2 id="lock">The lock screen</h2>
+  <dl>
+    <dt>The list, without unlocking</dt><dd>Open tasks, the ones for where you are first, with routines at the top. Settings can reduce this to just the count.</dd>
+    <dt>Record from the lock screen</dt><dd>Tasks only, so a ramble becomes several clean tasks. Three quick taps on the orb reveal Interview: audio only, never transcribed unless you say so.</dd>
+    <dt>Alarms that are ringing</dt><dd>Sit at the top with Delay and Done.</dd>
+    <dt>Update available</dt><dd>A yellow line appears when a newer One Button is live, or a newer phone build is out. Tap it to refresh or install.</dd>
+  </dl>
+
+  <h2 id="conv">Conversations</h2>
+  <dl>
+    <dt>Written up by themselves</dt><dd>Every recording over a minute gets a title, a summary, key points, quotes, the tasks it mentioned and the projects it could start, as soon as it stops.</dd>
+    <dt>On the card</dt><dd>Play it. Read or share the transcript. Tick the actions you want and Add ticked to my list. Ask Claude about it. Send link opens a shared space with each person who was in it.</dd>
+    <dt>To the vault</dt><dd>The laptop files the recording and the note into your vault under the person it was with, then the server lets go of the audio.</dd>
+  </dl>
+
+  <h2 id="spaces">Shared spaces</h2>
+  <dl>
+    <dt>One space per person</dt><dd>The conversations you had together, what grew from them, projects and tasks, on one page only the two of you can open. Joining the link is the consent.</dd>
+    <dt>No password</dt><dd>The first link signs the person in and shows an account code once. The code signs them in anywhere after. You can mint a new one if it is lost.</dd>
+    <dt>Members add too</dt><dd>Anyone in the space can record into it, or add a project, a note or a task. It shows for both sides within a minute, tagged with who added it.</dd>
+    <dt>Held</dt><dd>Anything marked held in the vault note shows to you only, until you take the mark off.</dd>
+    <dt>Daily update</dt><dd>One short update a day, only on days something changed, by email or just on the page, with stop in every message.</dd>
+    <dt>What you can see</dt><dd>The space list shows when each person last opened their space and what they added since you looked.</dd>
+  </dl>
+
+  <h2 id="projects">Projects</h2>
+  <dl>
+    <dt>Steward or drop</dt><dd>Projects proposed by conversations, by Claude and by the Idea Garden wait to be sorted. Steward one and it becomes yours; tick it to keep it on the main screen with its tasks under it.</dd>
+    <dt>Tasks inside projects</dt><dd>Tap a task to put it in a project. Tasks from a project's conversations belong to it by themselves.</dd>
+    <dt>Offer a project</dt><dd>Offer it to someone by name. Nothing enters their list until they accept. After that the tasks live with you and show for both, marked with who changed what. Either side can leave.</dd>
+    <dt>Build with Claude</dt><dd>A project can carry Claude asks, previews and a link to its shared page.</dd>
+  </dl>
+
+  <h2 id="triage">Task triage</h2>
+  <dl>
+    <dt>Every task, and where it came from</dt><dd>The Triage row under Projects opens a board of all open tasks by project, by conversation, by photo, waiting, and unplaced.</dd>
+    <dt>Sort from the board</dt><dd>Tick, move to a project, put on the front page or park. Actions a conversation suggested but you never ticked are one tap to add.</dd>
+  </dl>
+
+  <h2 id="photos">Photos and accounts</h2>
+  <dl>
+    <dt>Receipts</dt><dd>Each one becomes a line in accounts: month, shop, total, items. The laptop keeps a spreadsheet with a weekly view and a split per person.</dd>
+    <dt>The Mirror</dt><dd>For each receipt, Claude estimates where the money goes (labour, rent, debt) and names a regenerative or local alternative nearby.</dd>
+  </dl>
+
+  <h2 id="claude">Claude</h2>
+  <dl>
+    <dt>The strip at the top</dt><dd>Asks working and asks answered. Answers can carry tasks, which wait under Decide where these go.</dd>
+    <dt>Change the app by voice</dt><dd>Say "Claude, the app should ...". The laptop builds a preview; you get Try, Approve and Not this. Approve puts it live.</dd>
+    <dt>Comment on a preview</dt><dd>An ask made while looking at a preview builds on that preview, not on the live app.</dd>
+  </dl>
+
+  <h2 id="settings">Settings</h2>
+  <dl>
+    <dt>My places</dt><dd>Name a place and Add, I am here. Tasks for a place come first when you are there and stay hidden until you are.</dd>
+    <dt>My daily rhythm</dt><dd>Things for yourself that come back daily, every few days, weekly or monthly, first on the lock screen.</dd>
+    <dt>Contacts and channels</dt><dd>Import from the phone, star a main channel. A task that names a person offers to message them.</dd>
+    <dt>App key</dt><dd>Browser only: paste the key once. The phone app carries its own.</dd>
+    <dt>Lock screen view</dt><dd>Full list or just the count.</dd>
+  </dl>
+
+  <h2 id="phone">The phone app</h2>
+  <dl>
+    <dt>Over the lock screen</dt><dd>The list shows when the screen goes off, unless you are on a call. Unlock and it steps aside unless you are recording.</dd>
+    <dt>Notification buttons</dt><dd>Record task, Interview, Pause list.</dd>
+    <dt>Interviews</dt><dd>Saved on the phone, listed in Settings with Share and Delete. Nothing is turned into text unless you tap Process.</dd>
+    <dt>Build number</dt><dd>Shown in Settings. The lock screen says when a newer build is out.</dd>
+  </dl>
+
+  <p class="note" style="margin-top:30px">Forks: the page and server are public at github.com/jayfcousins-cell/one-button. A fork runs everything on its own server except shared spaces, which go through the trust net you were invited on.</p>
+</div>
+</body>
+</html>

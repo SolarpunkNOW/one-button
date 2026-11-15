@@ -190,6 +190,7 @@
   .lk-tick{flex:none;width:48px;height:48px;border:1px solid rgba(255,255,255,.3);background:transparent;color:#FFFFFF;display:grid;place-items:center;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
   .lk-tick:active{background:var(--spark);color:#1A1A1A;border-color:var(--spark)}
   .lk-empty{padding:28px 0;color:#B8B8B8;font-size:16px;line-height:1.5}
+  .lk-upd{display:block;width:100%;margin:14px 0 0;padding:10px 12px;background:var(--spark);color:#1A1A1A;border:0;border-radius:0;font:600 13px "Inter",sans-serif;text-align:left;cursor:pointer}
   .lk-foot{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:16px}
   .lk-status{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.06em;color:#B8B8B8;min-height:18px;text-align:center}
   .lk-row{display:flex;align-items:center;justify-content:center;gap:22px;width:100%}
@@ -403,7 +404,8 @@
     <button class="save" id="set-save">Save</button>
     <p class="note">Off: the lock screen shows only how many tasks are open.</p>
     <div style="height:26px"></div>
-    <button class="tbtn" id="open-photos" style="margin-bottom:18px">Photos and accounts</button>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What One Button can do</button></div>
+    <button class="lk-upd hidden" id="set-upd" hidden style="margin:0 0 18px"></button>
     <label class="set-h">My places</label>
     <div id="places-list"></div>
     <div class="addrow"><input id="pl-name" class="full" placeholder="A place, e.g. Home, the kids' house" />
@@ -491,6 +493,7 @@
     <div class="lk-nav"><button class="lk-ico" id="lk-app" aria-label="Open the app" title="Open the app"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button><button class="lk-ico" id="lk-set" aria-label="Settings" title="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></button></div>
   </div>
   <div id="alarms-lock" class="alarms"></div>
+  <button class="lk-upd hidden" id="lk-upd" hidden></button>
   <div class="lk-head"><span>To do</span><span id="lk-count"></span></div>
   <div class="lk-list" id="lk-list"></div>
   <div class="lk-foot">
@@ -2522,7 +2525,28 @@ window.obHideLock=hideLock;
 window.obLockRecord=()=>{showLock();if(!lkLive)lockRecord();};
 window.obBusy=()=>lkLive||intOn;
 
+/* Update signal. /version.json is stamped at every deploy (web: when the page last changed;
+ * android: the newest phone build). A page that has been open since before the last deploy
+ * offers a refresh; a phone app older than the newest build offers the install file. Shown on
+ * the lock screen and in Settings; checked on load, every ten minutes and when the app returns. */
+let VER_SEEN=null;
+function checkUpdate(){
+  fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{
+    if(!v)return;
+    if(VER_SEEN===null)VER_SEEN=v.web||'';
+    const mine=NATIVE&&NATIVE.build?NATIVE.build():0;
+    let text='',go=null;
+    if(mine&&v.android>mine){text='App update: build '+v.android+' is out, you have '+mine+'. Tap to install.';go=()=>{location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
+    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='Update available. Tap to refresh One Button.';go=()=>location.reload();}
+    for(const b of [$('#lk-upd'),$('#set-upd')]){if(!b)continue;b.textContent=text;b.hidden=!text;b.classList.toggle('hidden',!text);b.onclick=go;}
+  }).catch(()=>{});
+}
+setInterval(checkUpdate,10*60e3);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdate();});
+
 function boot(){
+  checkUpdate();
+  $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent='What One Button can do';$('#sp-frame').src='/features.html';};
   // A person's link carries their key once; it is kept on this phone and dropped from the address.
   {const k=new URLSearchParams(location.search).get('key');if(k&&/^[\w-]{16,80}$/.test(k)){LS.set('ob-key',k);history.replaceState(null,'',location.pathname);}}
   renderNotes();

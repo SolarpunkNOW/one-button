@@ -3,6 +3,7 @@
 $ErrorActionPreference='Continue'
 Copy-Item "$env:USERPROFILE\canopy-mycelial\public\shell\spine.js" (Join-Path $PSScriptRoot 'spine.js') -Force
 Push-Location $PSScriptRoot
+& (Join-Path $PSScriptRoot 'version.ps1')
 firebase deploy --only hosting:one-button-jay --project canopy-website-ef7a8
 $code=$LASTEXITCODE
 Pop-Location
