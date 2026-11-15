@@ -2061,12 +2061,19 @@ function renderIv(){
       ${(s.about||[]).length?`<p class="note">Talked about: ${escapeHtml(s.about.join(', '))}</p>`:''}`;
     ivWithOffer=offer;
   }
-  // One shared space per person heard in the recording, made on the first tap if it is new.
-  if(s.status==='done'&&(s.people||[]).length){
-    h+=`<div class="iv-h">Shared spaces</div>`;
-    s.people.forEach((p,i)=>{const sp=spOf(p);
-      h+=`<div class="iv-row" style="align-items:center"><span style="flex:1">${escapeHtml(p)}<span class="iv-tag">${sp?(sp.joined?'joined':'space ready'):'new space'}</span></span>${sp?`<button class="tbtn" data-spopen="${i}">Open</button>`:''}<button class="tbtn" data-spsend="${i}">Send link</button></div>`;});
-    h+=`<p class="note">Each person gets their own private space with this conversation, its notes and transcript. The link signs them in once; after that, new conversations with them land there by themselves.</p>`;
+  // Share with: tick the spaces (people) this conversation goes into. People heard in it come
+  // first, ticked; every other space follows; anyone new can be named. Sharing puts the
+  // conversation in each space; a link is only sent to someone who has not joined yet.
+  if(s.status==='done'){
+    const heard=(s.people||[]),names=[...heard,...SPACES.map(sp=>sp.name).filter(n=>!heard.some(p=>String(p).toLowerCase()===String(n).toLowerCase()))];
+    h+=`<div class="iv-h">Share with</div>`;
+    names.forEach(p=>{const sp=spOf(p),inIt=!!(sp&&(sp.ivs||[]).includes(id)),isHeard=heard.includes(p);
+      h+=`<label class="iv-row" style="align-items:center;cursor:pointer"><input type="checkbox" data-spwith="${escapeHtml(p)}" ${isHeard&&!inIt?'checked':''} ${inIt?'disabled':''} style="width:22px;height:22px;margin-right:10px">
+        <span style="flex:1">${escapeHtml(p)}<span class="iv-tag">${inIt?'shared'+(sp.joined?' . joined':' . not joined yet'):sp?(sp.joined?'joined':'not joined yet'):'new space'}${isHeard?' . in this conversation':''}</span></span>
+        ${sp?`<button class="tbtn" data-spopen="${escapeHtml(p)}">Open</button>`:''}${sp&&!sp.joined?`<button class="tbtn" data-spsend="${escapeHtml(p)}">Send link</button>`:''}</label>`;});
+    h+=`<div class="addrow"><input id="iv-spnew" class="full" placeholder="Someone else, by first name"></div>
+      <div class="iv-row"><button class="save" id="iv-shareto">Share with ticked</button></div>
+      <p class="note">Each person has one private space with your conversations, notes and transcripts. Sharing puts this conversation there. Someone who has not joined yet needs the link once.</p>`;
   }
   if(s.status==='working') h+=`<p class="note">Turning it into a note. This takes about a minute; you can close this and come back.</p>`;
   else if(s.status==='error') h+=`<p class="note">${escapeHtml(s.error||'That did not work.')}</p><div class="iv-row"><button class="tbtn" id="iv-proc">Try again</button></div>`;
@@ -2101,8 +2108,18 @@ function renderIv(){
   }
   b.innerHTML=h;
   $('#iv-share').onclick=()=>NATIVE&&NATIVE.shareInterview(name);
-  b.querySelectorAll('[data-spopen]').forEach(x=>x.onclick=()=>spOpen(spOf(s.people[+x.dataset.spopen])));
-  b.querySelectorAll('[data-spsend]').forEach(x=>x.onclick=()=>spSendPerson(s.people[+x.dataset.spsend],id,x));
+  b.querySelectorAll('[data-spopen]').forEach(x=>x.onclick=e=>{e.preventDefault();spOpen(spOf(x.dataset.spopen));});
+  b.querySelectorAll('[data-spsend]').forEach(x=>x.onclick=e=>{e.preventDefault();spSendPerson(x.dataset.spsend,id,x);});
+  const st2=$('#iv-shareto'); if(st2) st2.onclick=async()=>{
+    const names=[...b.querySelectorAll('[data-spwith]:checked')].map(c=>c.dataset.spwith);
+    const extra=($('#iv-spnew').value||'').trim(); if(extra)names.push(extra);
+    if(!names.length){showToast('Tick a space or name someone first');return;}
+    st2.disabled=true;st2.textContent='Sharing...';let n=0,unjoined=[];
+    for(const name of names){try{const r=await fetch(API+'/api/space/person',{method:'POST',headers:obHeaders(),body:JSON.stringify({name,interview:id,share:true})});
+      const d=await r.json(); if(!r.ok)throw 0; n++; if(!d.joined)unjoined.push(name);}catch{showToast('Could not share with '+name);}}
+    await spRefresh(); renderIv();
+    showToast(n?`Shared with ${n} space${n===1?'':'s'}`+(unjoined.length?`. ${unjoined.join(', ')} still need${unjoined.length===1?'s':''} the link`:''):'Nothing shared');
+  };
   b.querySelectorAll('[data-with]').forEach(x=>x.onclick=()=>{const v=x.dataset.with,cur=s.people||[];
     if(v==='me')return ivSetWith(id,[]);
     const p=ivWithOffer[+v],on=cur.some(c=>c.toLowerCase()===p.toLowerCase());

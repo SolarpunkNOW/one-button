@@ -748,6 +748,7 @@ async function spList() {
   // member last opened it, so the host can tell a read space from a silent one.
   const mine = docs.map((s) => ({ slug: s.slug, person: s.person, name: s.name, updated: s.updated, joined: !!s.joined,
     convs: ((s.data && s.data.convs) || []).length, tasks: ((s.data && s.data.tasks) || []).length,
+    ivs: ((s.data && s.data.convs) || []).map((c) => c.iv).filter(Boolean),
     fresh: addedList(s).filter((x) => (x.at || 0) > (s.hostSeen || 0)).length, lastAdded: s.lastAdded || 0, seen: s.seen || {} }));
   // And the spaces others host with this person in them: the same conversations, projects and
   // tasks both people generated, seen from the member's side.
@@ -823,7 +824,11 @@ async function spForPerson(body) {
     add.projects.forEach((p) => { p.id = "p" + (data.projects.length + 1); data.projects.push(p); });
     if (!data.since) data.since = "From " + add.conv.date;
   }
+  const had = s.exists && (s.data().data.convs || []).some((c) => c.iv === iv.id || c.title === title);
   await ref.set({ slug, person: pid, name, data, updated: Date.now() }, { merge: true });
+  // "Share with": the conversation goes into the space and that is all. The link is sent
+  // separately, only to someone who has not joined yet.
+  if (body.share) return [200, { ok: true, slug, name, joined: !!(s.exists && s.data().joined), added: !had }];
   return spInvite({ slug });
 }
 
