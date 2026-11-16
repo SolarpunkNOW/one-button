@@ -118,10 +118,10 @@
   .chip.on{color:var(--cream);background:var(--forest-2);border-color:var(--forest-2)}
   .note-item{display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
   .ndot{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none}
-  .ntext{flex:1;font-size:15px;line-height:1.4}
+  .ntext{flex:1;min-width:0;overflow-wrap:anywhere;font-size:15px;line-height:1.4}
   .nmeta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;align-items:center}
   .subcount{background:var(--cream-2);border-radius:0;padding:1px 8px;color:var(--forest-2);font-weight:500}
-  .ndone{background:transparent;border:none;color:var(--muted);font-size:18px;cursor:pointer;align-self:center}
+  .ndone{flex:none;min-width:36px;min-height:36px;background:transparent;border:none;color:var(--muted);font-size:18px;cursor:pointer;align-self:center}
   .empty{text-align:center;color:var(--muted);padding:50px 20px;font-size:14.5px;line-height:1.6}
   .contact-item{display:flex;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
   .contact-item .cn{flex:1;font-weight:500}
@@ -129,7 +129,8 @@
   .ch-tags{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap}
   .ch-tag{font-size:10px;font-family:"IBM Plex Mono";text-transform:uppercase;letter-spacing:.5px;background:var(--cream-2);color:var(--forest-2);border-radius:0;padding:2px 6px;cursor:pointer}
   .ch-tag.on{background:var(--forest-2);color:var(--cream)}
-  .addrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+  .addrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:14px}
+  .addrow input,.addrow select,.addrow button{min-width:0;max-width:100%;box-sizing:border-box}
   .addrow input{padding:11px;border:1px solid var(--line);border-radius:0;font-size:13.5px}
   .addrow .full{grid-column:1 / -1}
   .addrow button{grid-column:1 / -1;background:var(--forest-2);color:#fff;border:none;border-radius:0;padding:12px;font-weight:600;cursor:pointer}
@@ -192,7 +193,7 @@
   .lk-empty{padding:28px 0;color:#B8B8B8;font-size:16px;line-height:1.5}
   .lk-upd{display:block;width:100%;margin:14px 0 0;padding:10px 12px;background:var(--spark);color:#1A1A1A;border:0;border-radius:0;font:600 13px "Inter",sans-serif;text-align:left;cursor:pointer}
   .lk-upd[hidden]{display:none}
-  /* Record a win: the same yellow bar when no update is waiting. The count opens the list. */
+  /* Today's wins: the same yellow bar when no update is waiting. The count opens the list. */
   .win-bar{display:flex;width:100%;margin:14px 0 0;background:var(--spark);color:#1A1A1A}
   .win-bar[hidden]{display:none}
   .win-bar button{background:none;border:0;color:inherit;min-height:44px;padding:0 12px;font:600 13px "Inter",sans-serif;cursor:pointer}
@@ -323,7 +324,7 @@
   </div>
   <div class="stage" id="stage">
     <button class="lk-upd" id="main-upd" hidden style="margin:0"></button>
-    <div class="win-bar" hidden style="margin:0"><button class="win-say">Record a win</button><button class="win-n" hidden></button></div>
+    <div class="win-bar" hidden style="margin:0"><button class="win-say">Today's wins</button><button class="win-n" hidden></button></div>
     <div class="status" id="status">tap to speak</div>
     <div class="orb-shell" id="shell">
       <div class="ring r1"></div>
@@ -516,7 +517,7 @@
   </div>
   <div id="alarms-lock" class="alarms"></div>
   <button class="lk-upd hidden" id="lk-upd" hidden></button>
-  <div class="win-bar" hidden><button class="win-say">Record a win</button><button class="win-n" hidden></button></div>
+  <div class="win-bar" hidden><button class="win-say">Today's wins</button><button class="win-n" hidden></button></div>
   <div class="lk-head"><span>To do</span><span id="lk-count"></span></div>
   <div class="lk-list" id="lk-list"></div>
   <div class="lk-foot">
@@ -1716,8 +1717,8 @@ let winRec=null;
 function sayWin(){if(winRec){winRec.stop();return;}if(mainLive||lkLive||intOn)return;
   const s=lock.classList.contains('on')?lkStatus:statusEl,btns=document.querySelectorAll('.win-say'),label=t=>btns.forEach(b=>b.textContent=t);
   s.textContent='say your win, tap the bar to stop';label('Listening, tap to save');
-  winRec=recognize({onLive:()=>{s.textContent='writing it up...';label('Record a win');},
-    onEnd:(t,err)=>{winRec=null;label('Record a win');
+  winRec=recognize({onLive:()=>{s.textContent='writing it up...';label("Today's wins");},
+    onEnd:(t,err)=>{winRec=null;label("Today's wins");
       if(err||!t){s.textContent=err==='locked'?'app key missing':'did not catch that, try again';return;}
       const now=Date.now();notes.unshift({id:now,text:t,cat:'do',done:true,doneAt:now,ts:now,win:true,subs:[],due:'',place:''});
       save();renderNotes();s.textContent='win saved';showToast('Win saved: '+t);}});}
