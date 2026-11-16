@@ -1,0 +1,109 @@
+/* One Button skin: Agnesiv Theme by Agnes Friedrich, Solarpunk NOW. https://infinitewin.world
+   Loaded after each page's own styles by /skins/skin.js. Rules from ~/.claude/skills/agnesiv-theme.
+   White ground everywhere (the theme keeps dark fills out of every medium), black ink text,
+   interface colours pink #FF2E88, yellow #FFE014, green #2EE06E, watercolour on the record button only. */
+
+/* Fonts: the pages ask for Inter / Inter Tight; these faces answer with Source Sans 3 / Jost. */
+@import url('/skins/agnesiv/fonts.css');
+@import url('/skins/agnesiv/frames.css');
+@import url('/skins/agnesiv/frames-sub.css');
+
+:root{
+  --cream:#FFFFFF; --cream-2:#F6F3EA; --forest:#FFFFFF; --forest-2:#141414;
+  --terra:#141414; --ochre:#555555; --spark:#FFE014;
+  --ink:#141414; --muted:#5A5A5A; --line:rgba(20,20,20,.16);
+  --paper:#FFFFFF; --surface:#F6F3EA;
+  --agv-pink:#FF2E88; --agv-yellow:#FFE014; --agv-green:#2EE06E;
+  /* task kinds take the theme's pigments (middle tone) */
+  --fix:#F07A4A; --check:#1F9E70; --buy:#F7A440; --do:#3CC4DA; --have:#7CD45A;
+}
+body{background:#FFFFFF;color:var(--ink)}
+canvas#myc{display:none}
+
+/* Labels: Jost small caps instead of the mono */
+.pb-cat,.p1-lbl,.status,.result .rl,.set-h,.field label,.iv-h,.iv-tag,.sec-lbl,.nd-cat,.lk-date,.lk-head,.constellation .c-lbl,.pv-what,.lk-ready-t{
+  font-family:"Inter Tight",sans-serif !important;letter-spacing:.08em}
+.hint,.constellation a,.nmeta,.td-time,.al-t,.lk-status,.bl-row-s,.bl-step,.bl-log,.pb-row small,.pj-h small,.subcount,.lk-gcount,.lk-date,.contact-item .cnum,.ch-tag,.nd-status,.iv-meta,.win-bar .win-n,.sv-cat,.sv-foot{font-family:"Inter",sans-serif !important}
+.mark b{box-shadow:inset 0 -7px 0 var(--agv-pink);color:var(--ink)}
+.pj-h{border-bottom:2px solid var(--ink)}
+
+/* The record button: Agnes's watercolour bloom with an open ink contour */
+.orb,.mini-orb,.lk-orb{background:transparent url('/skins/agnesiv/orb.svg') center/100% no-repeat !important;border-radius:0 !important;
+  box-shadow:none !important;color:#141414}
+.orb.busy{background-image:url('/skins/agnesiv/orb-busy.svg') !important}
+.listening .orb,.mini-orb.live,.lock.rec .lk-orb{background-image:url('/skins/agnesiv/orb-live.svg') !important}
+.orb-dot{background:#141414;box-shadow:none;width:11px;height:11px}
+.ring{border-color:rgba(255,46,136,.35)}
+.ring.r2{border-color:rgba(255,224,20,.5)}
+.levels i{background:var(--agv-pink)}
+.listening .orb{animation:agvBreath 2.4s ease-in-out infinite}
+@keyframes agvBreath{50%{transform:scale(1.04) rotate(2deg)}}
+@keyframes lkpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,46,136,.35)}50%{box-shadow:0 0 0 18px rgba(255,46,136,0)}}
+@media (prefers-reduced-motion:reduce){.listening .orb{animation:none}}
+
+/* Hand-drawn frames replace straight borders (frames.css draws them) */
+.result,.bl-card,.tr-card,.cl-strip,.pill,.save,.tbtn,.p1-speak,.addrow button,.chip,.lk-tick,.ico-btn,.al-row,.lk-upd{border:0 !important;border-radius:0}
+.pill,.save,.tbtn,.p1-speak,.addrow button,.chip{font-family:"Inter Tight",sans-serif}
+.pill.go,.save,.p1-speak,.addrow button{color:#FFFFFF}
+.chip.on{color:#141414}
+.tbtn{color:#141414}
+.sub-box{border-radius:6px;border-color:#141414}
+.sub-box.done{background:var(--agv-green);border-color:#141414;color:#141414}
+.bl-step.now{background:var(--agv-yellow);border-color:#141414;color:#141414}
+.cele-n::before,.cele-n::after{border-color:var(--agv-pink)}
+.toast{background:#FFFFFF;color:#141414;box-shadow:0 0 0 2px #141414,0 10px 24px rgba(255,46,136,.25)}
+
+/* Screensaver and lock screen go white with ink, like a sheet of paper */
+.saver{background:#FFFFFF}
+.saver .sv-text{color:#141414}
+.saver .sv-foot{color:var(--muted)}
+.lock{background:#FFFFFF;color:#141414}
+.lock .lk-date,.lock .lk-head,.lock .lk-gcount,.lock .lk-chev,.lock .lk-empty,.lock .lk-status,.lock .p1-lbl{color:var(--muted)}
+.lk-close,.lk-int,.lk-cl{border-color:rgba(20,20,20,.35) !important;color:#141414 !important}
+.lk-list,.lk-item,.lk-group,.lk-pbody,.lock .bl-row,.lock .iv-li{border-color:var(--line) !important}
+.lk-group{color:#141414}
+.lk-tick{color:#141414}
+.lk-tick:active{transform:scale(.92)}
+.lock .bl-row-s{color:var(--muted)}
+.lock .bl-row.need .bl-row-s,.lock .bl-more,.lk-ready-t{color:#E0127A}
+.lk-ready{border-color:var(--agv-pink)}
+.lock .bl-card{color:#141414}
+.lock .iv-tag,.lock .bl-log,.lock .note,.lock .iv-ans{color:var(--muted)}
+.lock .bl-step{border-color:var(--line);color:var(--muted)}
+.lock .bl-step.past{background:var(--surface);color:#141414}
+.lock .tbtn,.lk-act{color:#141414 !important;background:transparent}
+.lk-ico{border-color:rgba(20,20,20,.35);color:#141414}
+.win-bar{background:var(--agv-yellow);color:#141414}
+.pick{background:rgba(255,255,255,.96)}
+.pick-t{color:#141414}
+.pk-b{border-color:#141414;color:#141414}
+.pk-b.go{background:var(--agv-pink);color:#FFFFFF;border-color:#141414}
+.lk-close:focus-visible,.lk-tick:focus-visible,.lk-orb:focus-visible,.lk-int:focus-visible,.lk-group:focus-visible{outline-color:#141414}
+
+/* Credit, added by skin.js wherever a page has a footer spot */
+.agv-credit{display:block;text-align:center;font:400 12px "Inter",sans-serif;color:var(--muted);padding:14px 16px}
+.agv-credit a{color:inherit}
+
+/* Space, seed space, theme, highlight, soundbite and features pages */
+.agv-sub button,.agv-sub a.btn,.agv-sub .btn,.agv-sub .box,.agv-sub .seed,.agv-sub .toc a{border:0 !important;border-radius:0}
+.agv-sub button,.agv-sub a.btn,.agv-sub .btn,.agv-sub .toc a{font-family:"Inter Tight",sans-serif;color:#141414}
+.agv-sub button.on,.agv-sub.agv-b button{color:#FFFFFF}
+.agv-sub .tag{font-family:"Inter Tight",sans-serif !important;letter-spacing:.08em}
+.agv-sub .q,.agv-sub blockquote{border-left-color:var(--agv-pink)}
+.agv-sub .next{border-left-color:var(--agv-green)}
+.agv-sub h2{border-top-color:var(--line)}
+
+/* Task dots: the app paints them inline; map each old colour to the theme's pigment */
+.ndot[style*="#C84B31" i]{background:#F07A4A !important}
+.ndot[style*="#2f5d3a" i]{background:#1F9E70 !important}
+.ndot[style*="#B5872B" i]{background:#F7A440 !important}
+.ndot[style*="#2C4A6E" i]{background:#3CC4DA !important}
+.ndot[style*="#6B7F3A" i]{background:#7CD45A !important}
+.ndot{box-shadow:0 0 0 1.5px #141414}
+/* Main board rows keep their plain ruled lines; projects read as headings */
+.pb-row{font-family:"Inter Tight",sans-serif}
+.pb-body{border-left:2px solid var(--agv-pink);border-bottom-color:var(--line)}
+/* Lock screen project rows are buttons, which skip the page font */
+.lk-proj,.lk-text,.lock button{font-family:"Inter",sans-serif}
+.lk-gname{font-family:"Inter Tight",sans-serif}
+.lk-close{border-radius:50%}
