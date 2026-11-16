@@ -117,7 +117,8 @@
   .chip{border:1px solid var(--line);background:#fff;border-radius:0;padding:7px 13px;font-size:12.5px;font-weight:500;cursor:pointer;color:var(--ink)}
   .chip.on{color:var(--cream);background:var(--forest-2);border-color:var(--forest-2)}
   .note-item{display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
-  .ndot{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none}
+  /* Dots sit a little in from the edge so their outline is never clipped by a scrolling list. */
+  .ndot{width:9px;height:9px;border-radius:50%;margin-top:6px;margin-left:3px;flex:none}
   .ntext{flex:1;min-width:0;overflow-wrap:anywhere;font-size:15px;line-height:1.4}
   .nmeta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;align-items:center}
   .subcount{background:var(--cream-2);border-radius:0;padding:1px 8px;color:var(--forest-2);font-weight:500}
@@ -1739,7 +1740,8 @@ function renderWinList(){const box=$('#wins-body'),list=winsOf().slice(0,40);
   box.querySelectorAll('[data-wu]').forEach(b=>b.onclick=()=>{const n=list[+b.dataset.wu];
     if(n.win)n.deleted=true;else{n.done=false;delete n.doneAt;}
     save();renderNotes();renderWinList();showToast(n.win?'Win taken back':'Back on your list');});}
-document.querySelectorAll('.win-say').forEach(b=>b.onclick=sayWin);
+// The yellow bar only shows today's wins; tapping it opens the list (wins are recorded by ticking things off).
+document.querySelectorAll('.win-say').forEach(b=>b.onclick=openWins);
 document.querySelectorAll('.win-n').forEach(b=>b.onclick=openWins);
 document.addEventListener('visibilitychange',()=>setTimeout(celebrate,800));
 setInterval(celebrate,600000);
