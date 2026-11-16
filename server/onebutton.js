@@ -1215,6 +1215,30 @@ async function spHighlight(req, body, visitor) {
  * and, to the public, only the seeds everyone has agreed to. Host only to build and publish. */
 const themeRef = (slug) => listRef().collection("themes").doc(slug);
 const hasWords = (words, ...parts) => { const t = parts.map((p) => Array.isArray(p) ? p.join(" ") : String(p || "")).join(" ").toLowerCase(); return words.some((w) => t.includes(w)); };
+/* ---------- The phone app's own updates ----------
+ * Each Android build is uploaded here by the build pipeline (Jay's key), so the app can fetch the
+ * newest one with the person's own key and open the installer itself, instead of sending them to a
+ * private GitHub page. */
+const apkFile = () => admin.storage().bucket().file("onebutton/app/one-button.apk");
+const appMeta = () => admin.firestore().collection("onebutton_meta").doc("android");
+async function appUpload(req, me) {
+  if (!me || !me.admin) return [403, { error: "only Jay's key uploads builds" }];
+  const buf = req.rawBody, build = Math.max(0, Number(req.query.build) || 0);
+  if (!buf || buf.length < 100000) return [400, { error: "no install file" }];
+  if (buf.length > 60 * 1024 * 1024) return [413, { error: "install file too big" }];
+  await apkFile().save(buf, { contentType: "application/vnd.android.package-archive", resumable: false });
+  await appMeta().set({ build, size: buf.length, at: Date.now() });
+  return [200, { ok: true, build }];
+}
+async function appInfo() { const m = await appMeta().get(); return [200, m.exists ? m.data() : { build: 0 }]; }
+async function appLatest(res) {
+  const [ok] = await apkFile().exists();
+  if (!ok) { res.status(404).json({ error: "no build uploaded yet" }); return; }
+  const m = (await appMeta().get()).data() || {};
+  const [buf] = await apkFile().download();
+  res.set("Cache-Control", "no-store").set("x-ob-build", String(m.build || 0)).type("application/vnd.android.package-archive").send(buf);
+}
+
 /* ---------- Search and listening ---------- */
 // Words in, moments out: each hit is a conversation, the second it happens and the line around it.
 function findIn(transcript, segments, q) {
@@ -2253,6 +2277,12 @@ exports.oneButton = onRequest(
 
 // Everything a key holder can do, run as that person so listRef() points at their list.
 async function routed(req, res, body, sp, send, me) {
+    const ap = req.path.match(/\/app\/(upload|info|latest)$/);
+    if (ap) {
+      try { if (ap[1] === "latest") { await appLatest(res); return; } send(ap[1] === "upload" ? await appUpload(req, me) : await appInfo()); }
+      catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
     const pe = req.path.match(/\/person\/(add|list|revoke|link)$/);
     if (pe) {
       if (!me.admin) { res.status(403).json({ error: "only Jay adds people" }); return; }
