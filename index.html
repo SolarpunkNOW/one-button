@@ -1903,7 +1903,8 @@ function addMissing(list){let added=0,there=0;
   save();renderNotes();
   showToast(added?added+' added to Buy'+(there?', '+there+' already there':''):'All of that is on your Buy list already');}
 
-$('#set-save').onclick=()=>{const k=$('#set-key').value.trim(); if(k) LS.set('ob-key',k);
+// The key, or the whole personal link pasted as it is: the key is taken from it.
+$('#set-save').onclick=()=>{let k=$('#set-key').value.trim();const m=k.match(/[?&]key=([\w-]{16,80})/);if(m)k=m[1]; if(k) LS.set('ob-key',k);
   LS.set('ob-lockfull',$('#set-lockfull').checked);
   LS.set('ob-words',$('#set-words').value.split(',').map(s=>s.trim()).filter(Boolean));showToast('Saved');closeSheets();statusEl.textContent='tap to speak';};
 
