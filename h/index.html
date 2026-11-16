@@ -51,6 +51,7 @@ const Q=new URLSearchParams(location.search),id=Q.get('id')||'',PREVIEW=Q.get('p
     const where=p=>{const c=conv[0]||{};return (c.title?'From "'+esc(c.title)+'"'+(c.date?', '+esc(c.date):''):'From a conversation')+(p&&p.at?' at '+mmss(p.at):'');};
     $('#body').innerHTML=`<h1>${esc(h.title)}</h1>
       <p class="lede">From ${conv.length===1?'a conversation':conv.length+' conversations'} between ${esc((h.people||[]).join(' and '))}${conv[0]&&conv[0].date?', '+esc(conv[0].date):''}. Shared with everyone's agreement.</p>
+      ${(h.slides||[]).map((s,i)=>`<div class="pt"><div class="tag">${i+1} of ${h.slides.length}</div><b style="font-family:'Inter Tight',sans-serif;font-size:19px">${esc(s.title)}</b>${(s.points||[]).map(x=>`<div style="margin-top:6px">${esc(x)}</div>`).join('')}</div>`).join('')}
       ${(h.points||[]).map(p=>`<div class="pt">${esc(p.text)}${p.prov&&p.prov.quote?`<div class="q">${where(p.prov)}: "${esc(p.prov.quote)}"</div>`:''}</div>`).join('')}
       ${(h.quotes||[]).length?`<div class="tag" style="margin-top:28px">Words worth keeping</div>${h.quotes.map(q=>`<div class="quote">${esc(q.text)}<br><span class="tag">${where(q.prov)}</span></div>`).join('')}`:''}
       <p class="foot">Made with One Button. The full conversation stays private with the people who had it.</p>`;})

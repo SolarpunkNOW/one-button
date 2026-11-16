@@ -1065,7 +1065,7 @@ const addedList = (o) => { const a = o.added || {}; return [...(a.convs || []), 
 function withAdded(s) {
   const d = s.data().data || {}, a = s.data().added || ADDED;
   return { ...d, convs: [...(d.convs || []), ...(a.convs || [])], tasks: [...(d.tasks || []), ...(a.tasks || [])],
-    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])] };
+    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])], marks: a.marks || [] };
 }
 // Who is acting on a space: a signed-in member (Weave token), or the host through the app key.
 async function actorFor(req, body, slug, visitor) {
@@ -1184,7 +1184,7 @@ async function spHighlight(req, body, visitor) {
   const convs = d.convs.filter((c) => ids.includes(c.id) && !c.held);
   if (!convs.length) return [400, { error: "pick a conversation first" }];
   const names = (d.people || []).map((p) => p.name).join(" and ");
-  for (const c of convs) { const h = await convHeavy(slug, c.id); c.transcript = h.transcript || c.transcript || ""; c.segments = h.segments || c.segments || []; }
+  for (const c of convs) { const h = await wordsFor(slug, c); c.transcript = h.transcript || c.transcript || ""; c.segments = h.segments || c.segments || []; }
   const doc = await writeHighlight(convs, names, by.id, d.people || [], slug);
   if (!doc) return [502, { error: "could not write the highlight" }];
   await pushAdded(slug, { docs: [doc] });
@@ -1273,6 +1273,183 @@ async function ivRemove(body) {
   return [200, { ok: true }];
 }
 
+/* ---------- Marks, soundbites, presentations, asking ----------
+ * Inside a shared space the people in it go through the words together. A mark is a stretch of a
+ * conversation (from/to seconds and its words) marked "share" or "private". Private wins at once and
+ * never needs anyone's agreement: those words are left out of every summary, seed, highlight,
+ * presentation and answer. "Share" needs everyone's yes, like a highlight. A shared mark can become a
+ * soundbite (the clip itself, cut in the member's browser) and, agreed, a public soundbite page. */
+const bitesRef = () => admin.firestore().collection("onebutton_bites");
+const clipFile = (slug, id) => admin.storage().bucket().file(`onebutton/spaces/${slug}/clips/${id}.wav`);
+async function marksOf(slug) { const s = await spaceRef(slug).get(); return ((s.data() || {}).added || {}).marks || []; }
+// The words of a conversation with every privately marked stretch taken out.
+function redact(transcript, segments, marks, conv) {
+  const priv = marks.filter((m) => m.kind === "private" && m.conv === conv);
+  if (!priv.length) return { transcript, segments };
+  const inPriv = (at) => priv.some((m) => at >= m.from - 0.5 && at <= m.to + 0.5);
+  if (Array.isArray(segments) && segments.length) {
+    const segs = segments.filter(([at]) => !inPriv(at));
+    return { transcript: segs.map(([, x]) => x).join(" "), segments: segs };
+  }
+  let tx = String(transcript || "");
+  for (const m of priv) if (m.text) tx = tx.split(m.text).join(" [kept private] ");
+  return { transcript: tx, segments };
+}
+async function wordsFor(slug, c) { const h = await convHeavy(slug, c.id); return redact(h.transcript || c.summary || "", h.segments || [], await marksOf(slug), c.id); }
+async function marksPut(slug, fn) {
+  const ref = spaceRef(slug);
+  return admin.firestore().runTransaction(async (t) => {
+    const s = await t.get(ref);
+    if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
+    const a = { ...ADDED, ...(s.data().added || {}) };
+    const out = fn([...(a.marks || [])], s);
+    a.marks = out.marks;
+    t.set(ref, { added: a, updated: Date.now() }, { merge: true });
+    return out.result;
+  });
+}
+async function spMark(req, body, visitor) {
+  const slug = String(body.slug || ""), conv = String(body.conv || "");
+  if (!SLUG_RE.test(slug) || !/^[\w-]{1,40}$/.test(conv)) return [400, { error: "bad request" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await spaceRef(slug).get();
+  const d = withAdded(s), c = (d.convs || []).find((x) => x.id === conv);
+  if (!c || (c.held && by.id !== "jay")) return [404, { error: "no such conversation" }];
+  const kind = body.kind === "private" ? "private" : "share", at = Date.now(), id = "k" + at.toString(36);
+  const from = Math.max(0, Number(body.from) || 0), to = Math.max(from, Number(body.to) || from);
+  const consent = {}; for (const p of d.people || []) consent[p.id] = p.id === by.id ? "ok" : "pending";
+  const mark = { id, conv, convTitle: c.title, from, to, text: String(body.text || "").slice(0, 1200), note: String(body.note || "").slice(0, 300), kind, by: by.id, at,
+    ...(kind === "share" ? { consent, status: "waiting" } : { status: "private" }) };
+  await marksPut(slug, (m) => ({ marks: [...m, mark].slice(-2000), result: null }));
+  return [200, { ok: true, id }];
+}
+// ok / no from someone in the space; private (anyone may make a shared mark private); drop (its maker or Jay).
+async function spMarkSet(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || ""), act = String(body.act || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const res = await marksPut(slug, (marks) => {
+    const i = marks.findIndex((m) => m.id === id);
+    if (i < 0) throw Object.assign(new Error("no such mark"), { code: 404 });
+    const m = { ...marks[i] };
+    if (act === "drop") {
+      if (m.by !== by.id && by.id !== "jay") throw Object.assign(new Error("only whoever marked it can remove it"), { code: 403 });
+      marks.splice(i, 1);
+      return { marks, result: { dropped: true } };
+    }
+    if (act === "private") { m.kind = "private"; m.status = "private"; delete m.consent; delete m.link; m.privateBy = by.id; }
+    if (act === "ok" || act === "no") {
+      if (m.kind !== "share" || !(by.id in (m.consent || {}))) throw Object.assign(new Error("only the people in the space decide"), { code: 403 });
+      m.consent = { ...m.consent, [by.id]: act === "ok" ? "ok" : "no" };
+      const all = Object.values(m.consent).every((v) => v === "ok");
+      m.status = all ? (m.status === "public" ? "public" : "agreed") : "waiting";
+      if (!all) delete m.link;
+    }
+    marks[i] = m;
+    return { marks, result: { status: m.status, kind: m.kind } };
+  });
+  if (act === "private" || act === "no" || act === "drop") await bitesRef().doc(id).delete().catch(() => {});
+  if (act === "private" || act === "drop") await clipFile(slug, id).delete({ ignoreNotFound: true }).catch(() => {});
+  return [200, { ok: true, ...res }];
+}
+// The soundbite itself: a short WAV the member's browser cut from the recording.
+async function spClip(req, visitor) {
+  const slug = String(req.query.slug || ""), id = String(req.query.id || "");
+  if (!SLUG_RE.test(slug) || !/^k[a-z0-9]{1,20}$/.test(id)) return [400, { error: "bad request" }];
+  await actorFor(req, {}, slug, visitor);
+  const buf = req.rawBody;
+  if (!buf || !buf.length) return [400, { error: "no audio" }];
+  if (buf.length > 8 * 1024 * 1024) return [413, { error: "a soundbite is at most a couple of minutes" }];
+  const m = (await marksOf(slug)).find((x) => x.id === id);
+  if (!m || m.kind !== "share") return [404, { error: "only a shared mark can be a soundbite" }];
+  await clipFile(slug, id).save(buf, { contentType: "audio/wav", resumable: false });
+  await marksPut(slug, (marks) => ({ marks: marks.map((x) => x.id === id ? { ...x, clip: true } : x), result: null }));
+  return [200, { ok: true }];
+}
+async function spBite(req, res, visitor) {
+  const slug = String(req.query.slug || ""), id = String(req.query.id || "");
+  if (!SLUG_RE.test(slug) || !/^k[a-z0-9]{1,20}$/.test(id)) { res.status(400).json({ error: "bad request" }); return; }
+  await actorFor(req, {}, slug, visitor);
+  const [buf] = await clipFile(slug, id).download();
+  res.set("Cache-Control", "private, max-age=3600").type("audio/wav").send(buf);
+}
+// Agreed by everyone: the soundbite gets its own public page.
+async function spBitePublish(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || ""), to = body.to === "private" ? "private" : "public";
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await spaceRef(slug).get(), m = (await marksOf(slug)).find((x) => x.id === id);
+  if (!m || m.kind !== "share") return [404, { error: "no such soundbite" }];
+  if (to === "private") {
+    await bitesRef().doc(id).delete().catch(() => {});
+    await marksPut(slug, (marks) => ({ marks: marks.map((x) => x.id === id ? { ...x, status: "agreed", link: "" } : x), result: null }));
+    return [200, { ok: true }];
+  }
+  if (!Object.values(m.consent || {}).every((v) => v === "ok")) return [409, { error: "everyone in the space says yes first" }];
+  if (!m.clip) return [409, { error: "make the soundbite first" }];
+  const people = (((s.data() || {}).data || {}).people || []).map((p) => p.name);
+  const link = OB_SITE + "/b/?id=" + id;
+  await bitesRef().doc(id).set({ id, slug, text: m.text, note: m.note || "", convTitle: m.convTitle, people, publishedBy: by.id, publishedAt: Date.now(), licence: LICENCE });
+  await marksPut(slug, (marks) => ({ marks: marks.map((x) => x.id === id ? { ...x, status: "public", link } : x), result: null }));
+  return [200, { ok: true, link }];
+}
+async function biteGet(req, res, body) {
+  const id = String(body.id || req.query.id || "");
+  if (!/^k[a-z0-9]{1,20}$/.test(id)) { res.status(400).json({ error: "bad id" }); return; }
+  const b = await bitesRef().doc(id).get();
+  if (!b.exists) { res.status(404).json({ error: "this soundbite is not public" }); return; }
+  if (req.query.audio === "1") { const [buf] = await clipFile(b.data().slug, id).download(); res.set("Cache-Control", "public, max-age=3600").type("audio/wav").send(buf); return; }
+  res.json(b.data());
+}
+// A presentation from what everyone has agreed: shared marks and agreed highlights, nothing private.
+const DECK_SYS = `You make a short presentation from agreed excerpts of conversations, for people who were not there. Reply with JSON only:
+{"title": "at most 8 words", "slides": [{"title": "at most 8 words", "points": ["one plain sentence"], "bite": "the id in square brackets of one excerpt to play on this slide, or empty"}]}
+5 to 8 slides: an opening, the ideas in a sensible order, a closing with the open questions. Use only what the excerpts say. Never name anyone; never anything about anyone's personality, money, health or family. Warm, exact, no em dashes.`;
+async function spPresent(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await spaceRef(slug).get();
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), agreed = (x) => Object.values(x.consent || {}).every((v) => v === "ok");
+  const marks = (((s.data() || {}).added || {}).marks || []).filter((m) => m.kind === "share" && agreed(m));
+  const hls = (d.docs || []).filter((x) => x.kind === "Highlight" && agreed(x));
+  if (!marks.length && !hls.length) return [409, { error: "nothing agreed yet: mark passages to share, and both say yes, first" }];
+  const src = [...marks.map((m) => `[${m.id}] (${m.convTitle}) ${m.text}`), ...hls.map((h) => `[${h.id}] ${h.title}: ${(h.points || []).map((p) => p.text).join(" ")}`)].join("\n\n").slice(0, 50000);
+  const out = await chat({ messages: [{ role: "system", content: DECK_SYS }, { role: "user", content: src }] }, 3000);
+  let deck = null;
+  try { deck = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!deck || !Array.isArray(deck.slides)) return [502, { error: "could not make the presentation" }];
+  const ids = new Set(marks.filter((m) => m.clip).map((m) => m.id));
+  const slides = deck.slides.slice(0, 10).map((x) => ({ title: String(x.title || "").slice(0, 120), points: (Array.isArray(x.points) ? x.points : []).slice(0, 5).map((p) => String(p).slice(0, 280)), bite: ids.has(String(x.bite || "").replace(/[\[\]]/g, "")) ? String(x.bite).replace(/[\[\]]/g, "") : "" }));
+  const at = Date.now(), id = "p" + at.toString(36);
+  const consent = {}; for (const p of d.people || []) consent[p.id] = p.id === by.id ? "ok" : "pending";
+  await pushAdded(slug, { docs: [{ id, kind: "Presentation", title: String(deck.title || "Presentation").slice(0, 120), when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }), body: slides.map((x) => x.title).join("\n"), slides, by: by.id, at, consent, visibility: "space", origin: slug }] });
+  return [200, { ok: true, id }];
+}
+// Ask the space: an answer from the conversations' words (private stretches left out), each claim
+// pointing at the conversation and second it rests on. Only for the people in the space.
+async function spAsk(req, body, visitor) {
+  const slug = String(body.slug || ""), q = String(body.q || "").trim().slice(0, 500);
+  if (!SLUG_RE.test(slug) || !q) return [400, { error: "ask a question" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  const d = withAdded(s), qw = WORDS(q), parts = [];
+  for (const c of (d.convs || []).filter((x) => !x.held || by.id === "jay")) {
+    const w = await wordsFor(slug, c);
+    const segs = w.segments && w.segments.length ? w.segments : null;
+    let text;
+    if (segs) { const hit = segs.filter(([, x]) => WORDS(x).some((y) => qw.includes(y))); text = (hit.length ? hit : segs.slice(0, 60)).slice(0, 120).map(([at, x]) => `[${c.id}@${at}] ${x}`).join("\n"); }
+    else text = `[${c.id}@0] ` + String(w.transcript || "").slice(0, 6000);
+    parts.push(`## ${c.title} (${c.date})\n${text}`);
+  }
+  const ctx = parts.join("\n\n").slice(0, 80000);
+  const out = await chat({ messages: [{ role: "system", content: "Answer the question from these conversation excerpts only. After each claim put the marker of the line it rests on, exactly as written, like [c2@431]. If the excerpts do not say, say so. Plain English, short, no em dashes. Never anything about anyone's personality." }, { role: "user", content: `Question: ${q}\n\n${ctx}` }] }, 1500);
+  let answer = "";
+  try { answer = JSON.parse(out.text).choices[0].message.content; } catch {}
+  return [200, { q, answer: String(answer || "No answer came back.").slice(0, 6000) }];
+}
+
 /* ---------- Seeds and seed spaces ----------
  * A seed is an idea, project or question harvested from a conversation, pointing at the moment
  * it came from. It belongs to the people who were in that conversation: it stays private until
@@ -1295,7 +1472,7 @@ async function spHarvest(req, body, visitor) {
   if (!s.exists) return [404, { error: "no such space" }];
   const d = withAdded(s), c = (d.convs || []).find((x) => x.id === cid);
   if (!c || (c.held && by.id !== "jay")) return [404, { error: "no such conversation" }];
-  const h = await convHeavy(slug, c.id);
+  const h = await wordsFor(slug, c);
   const out = await chat({ messages: [{ role: "system", content: SEED_SYS }, { role: "user", content: `## ${c.title}\n${h.transcript || c.summary || ""}`.slice(0, 60000) }] }, 2500);
   let got = null;
   try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
@@ -1592,7 +1769,7 @@ async function hlFind(slug, id) {
   const s = await spaceRef(slug).get();
   if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
   const docs = ((s.data().added || {}).docs || []);
-  const i = docs.findIndex((x) => x.id === id && x.kind === "Highlight");
+  const i = docs.findIndex((x) => x.id === id && (x.kind === "Highlight" || x.kind === "Presentation"));
   if (i < 0) throw Object.assign(new Error("no such highlight"), { code: 404 });
   return { s, docs, i };
 }
@@ -1624,7 +1801,7 @@ async function spPublish(req, body, visitor) {
   if (waiting.length) return [409, { error: "waiting for " + waiting.join(", ") + " to say yes", waiting }];
   const people = ((s.data().data || {}).people || []).map((p) => p.name);
   if (to === "public") {
-    await hlRef().doc(id).set({ id, title: doc.title, when: doc.when, points: doc.points, quotes: doc.quotes, people, space: slug, publishedBy: by.id, publishedAt: Date.now(), convTitles: (withAdded(s).convs || []).filter((c) => (doc.convs || []).includes(c.id)).map((c) => ({ title: c.title, date: c.date })) });
+    await hlRef().doc(id).set({ id, kind: doc.kind, slides: doc.slides || null, title: doc.title, when: doc.when, points: doc.points || [], quotes: doc.quotes || [], people, space: slug, publishedBy: by.id, publishedAt: Date.now(), convTitles: (withAdded(s).convs || []).filter((c) => (doc.convs || []).includes(c.id)).map((c) => ({ title: c.title, date: c.date })) });
     docs[i].visibility = "public"; docs[i].link = OB_SITE + "/h/?id=" + id;
     await spaceRef(slug).set({ added: { ...(s.data().added || {}), docs }, updated: Date.now() }, { merge: true });
     return [200, { ok: true, link: docs[i].link }];
@@ -1677,7 +1854,7 @@ async function spExport(req, body, visitor) {
 }
 async function hlGet(body) {
   const id = String(body.id || "");
-  if (!/^h[a-z0-9]{1,20}$/.test(id)) return [400, { error: "bad id" }];
+  if (!/^[hp][a-z0-9]{1,24}$/.test(id)) return [400, { error: "bad id" }];
   const s = await hlRef().doc(id).get();
   return s.exists ? [200, s.data()] : [404, { error: "no such highlight" }];
 }
@@ -1703,7 +1880,7 @@ async function spServe(slug, s) {
         live.push({ who: "jay", text: String(t.text || ""), done: !!t.done, from: "", due: String(t.due || ""), held: "", project: want.get(t.project), live: true });
     }
   } catch {}
-  return [200, { ...d, banner: "", docs: (d.docs || []).filter(shown), convs: (d.convs || []).filter(keep), tasks: [...(d.tasks || []).filter(shown), ...live], projects }];
+  return [200, { ...d, banner: "", docs: (d.docs || []).filter(shown), convs: (d.convs || []).filter(keep), tasks: [...(d.tasks || []).filter(shown), ...live], projects, marks: (d.marks || []).filter((m) => !hidden.has(m.conv)) }];
 }
 
 /* Projects Jay stewards. Saved ones live in projects/{id}; the rest are proposals, worked out fresh
@@ -1838,15 +2015,18 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
       if (!(await checkRateLimit(sp[1] === "record" || sp[1] === "highlight" ? 60 : 400, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
+      if (sp[1] === "bite") { try { await spBite(req, res, visitor); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); } return; }
       if (sp[1] === "audio") { try { await spAudio(req, res, visitor); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); } return; }
       const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor), transcript: () => spTranscript(req, body, visitor), export: () => spExport(req, body, visitor),
         search: () => searchAll(req, body, visitor), harvest: () => spHarvest(req, body, visitor), projseed: () => spProjectSeed(req, body, visitor), seeds: () => spSeeds(req, body, visitor),
-        seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor) }[sp[1]];
+        seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
+        mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
+        present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
@@ -1856,6 +2036,11 @@ exports.oneButton = onRequest(
       const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
       if (!(await checkRateLimit(30, "obclaim_" + ip))) { res.status(429).json({ error: "too many tries today" }); return; }
       try { send(await personClaim(body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
+    if (req.path.endsWith("/bite/get")) {
+      // A public soundbite: its words, or with ?audio=1 the clip itself.
+      try { await biteGet(req, res, body); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
     if (req.path.endsWith("/hl/get")) {

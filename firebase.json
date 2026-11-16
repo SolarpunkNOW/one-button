@@ -16,6 +16,7 @@
       { "source": "/api/ss/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/search", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/hl/**", "function": "oneButton", "region": "us-central1" },
+      { "source": "/api/bite/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/theme/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/shop/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/project/**", "function": "oneButton", "region": "us-central1" },
