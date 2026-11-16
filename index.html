@@ -497,6 +497,10 @@
   <div class="sheet-bar"><h2>Projects</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body"><div id="proj-triage"></div><div id="proj-list"></div></div>
 </div>
+<div class="sheet" id="sheet-answer">
+  <div class="sheet-bar"><h2 id="an-title">Claude's answer</h2><button class="sheet-x" data-close>&times;</button></div>
+  <div class="sheet-body" id="an-body"></div>
+</div>
 <div class="sheet" id="sheet-plan">
   <div class="sheet-bar"><h2 id="pl-title">Claude's plan</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body" id="pl-body"></div>
@@ -1981,7 +1985,7 @@ function renderLock(){
   // Claude's answers to plain questions, until tapped Got it; and what Claude is still on.
   const lkAns=ASKS.filter(a=>a.kind!=='app'&&a.status==='done'&&!SEEN.includes(a.id)).slice(0,3),lkWork=ASKS.filter(a=>a.kind!=='app'&&a.status!=='done'&&Date.now()-(a.created||0)<864e5).slice(0,2);
   const lkHold=items.filter(x=>x.hold).length;
-  const ansRow=a=>`<div class="bl-row" style="cursor:default;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:0"><div class="bl-row-t">Claude: ${escapeHtml(askWords(a))}</div><div class="cl-ans" style="white-space:pre-wrap;font-size:14px;opacity:.9;margin-top:4px">${escapeHtml(String(a.answer||'').slice(0,600))}${String(a.answer||'').length>600?'...':''}</div></div><button class="lk-cl" data-lkseen="${a.id}" style="padding:8px 12px">Got it</button></div>`;
+  const ansRow=a=>`<div class="bl-row" style="cursor:pointer;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:0" data-lkread="${a.id}"><div class="bl-row-t">Claude: ${escapeHtml(askWords(a))}</div><div class="cl-ans" style="white-space:pre-wrap;font-size:14px;opacity:.9;margin-top:4px">${escapeHtml(String(a.answer||'').slice(0,600))}${String(a.answer||'').length>600?'...':''}</div></div><button class="lk-cl" data-lkseen="${a.id}" style="padding:8px 12px">Got it</button></div>`;
   const workRow=a=>`<div class="bl-row" style="cursor:default"><span class="bl-row-t">Claude is on it: ${escapeHtml(askWords(a))}</span><span class="bl-row-s">working</span></div>`;
   const holdRow=lkHold?`<button class="bl-row need" data-lkhold><span class="bl-row-t">${lkHold} task${lkHold>1?'s':''} waiting for a place</span><span class="bl-row-s">Decide</span></button>`:'';
   // Claude's answers live in the Claude strip and tasks waiting for a place live in Triage, so
@@ -1991,6 +1995,7 @@ function renderLock(){
     box.querySelectorAll('[data-lkshared]').forEach(b=>b.onclick=()=>{const {p,l}=lkShare[+b.dataset.lkshared];l.shared=true;projSave(p);renderLock();});
     wireOffers(box);
     box.querySelectorAll('[data-lkseen]').forEach(b=>b.onclick=()=>{seeAsks([b.dataset.lkseen]);renderLock();});
+    box.querySelectorAll('[data-lkread]').forEach(b=>b.onclick=()=>openAnswer(b.dataset.lkread));
     const hb=box.querySelector('[data-lkhold]');if(hb)hb.onclick=()=>{hideLock();showCat('all');window.scrollTo(0,0);};
     wireAskCards(box);lkList.appendChild(box);}
   const open=LS.get('ob-lockopen',{});
@@ -2465,6 +2470,18 @@ function ivAuto(){
 }
 // Main screen strip: what Claude is doing with your asks, and its answers until you've seen them.
 let SEEN=LS.get('ob-asks-seen',[]);
+// One answer, in full: the question, every word of the answer, the tasks it left waiting, and
+// Share / Got it. Opened from the yellow bar, the Claude card, or the lock screen.
+function openAnswer(id){const a=ASKS.find(x=>x.id===id);if(!a)return;
+  if(lock.classList.contains('on'))hideLock();
+  openSheet('#sheet-answer');$('#an-title').textContent='Claude answered';
+  $('#an-body').innerHTML=`<p class="nmeta" style="margin:0 0 10px">You asked: ${escapeHtml(askWords(a))}</p>
+    <div style="white-space:pre-wrap;font-size:16px;line-height:1.6;overflow-wrap:anywhere">${escapeHtml(a.answer||'(no answer text)')}</div>
+    ${a.tasks?`<p class="note" style="margin-top:14px">${a.tasks} task${a.tasks>1?'s':''} from this answer are waiting in Triage for a place.</p>`:''}
+    <div class="iv-row" style="margin-top:16px"><button class="save" id="an-ok">Got it</button><button class="tbtn" id="an-share">Share</button>${a.interview?'<button class="tbtn" id="an-conv">Open the conversation</button>':''}</div>`;
+  $('#an-ok').onclick=()=>{seeAsks([a.id]);CL_OPEN=false;closeSheets();renderClaude();};
+  $('#an-share').onclick=()=>ivShareText((askWords(a)?'Q: '+askWords(a)+'\n\n':'')+(a.answer||''));
+  const cv=$('#an-conv');if(cv)cv.onclick=()=>{closeSheets();openIv(a.interview+'.m4a',false);};}
 function seeAsks(ids){SEEN=[...new Set([...SEEN,...ids])].slice(-200);LS.set('ob-asks-seen',SEEN);renderClaude();}
 let CL_OPEN=false; // the answer card shows once the bar notice is tapped
 function renderClaude(){
@@ -2473,7 +2490,7 @@ function renderClaude(){
   const pend=ASKS.filter(a=>a.status!=='done'&&a.kind!=='app'), fresh=ASKS.filter(a=>a.status==='done'&&a.kind!=='app'&&!SEEN.includes(a.id));
   const a=fresh[0]||pend[0]; if(!a){box.innerHTML='';if(NOTICE&&NOTICE.claude){NOTICE=null;renderBar();}return;}
   if(fresh.length&&!CL_OPEN){const w=askWords(fresh[0]);NOTICE={text:'Claude answered'+(fresh.length>1?' ('+fresh.length+')':'')+': '+(w.length>60?w.slice(0,59)+'…':w),until:0,claude:true,
-      go:()=>{CL_OPEN=true;renderClaude();const s=$('#claude-strip');if(s)s.scrollIntoView({behavior:'smooth',block:'center'});}};renderBar();box.innerHTML='';return;}
+      go:()=>openAnswer(fresh[0].id)};renderBar();box.innerHTML='';return;}
   const n=fresh.length?fresh.length:pend.length, done=a.status==='done';
   const tag=done?`Claude answered${n>1?' . '+n+' new':''}`:`Claude is working${n>1?' on '+n:''}`;
   const body=done?`<div class="cl-ans">${escapeHtml(a.answer||'')}</div>${a.tasks?`<div class="iv-tag">${a.tasks} task${a.tasks>1?'s':''} waiting for you to place</div>`:''}`
@@ -2481,6 +2498,7 @@ function renderClaude(){
   box.innerHTML=`<div class="cl-strip" role="button" tabindex="0"><span class="cl-dot${done?' done':''}"></span><div class="cl-text"><div class="iv-tag">${tag}</div>${body}</div>${done?'<button class="cl-x" aria-label="Dismiss">&times;</button>':''}</div>`;
   const strip=box.firstChild;
   strip.onclick=e=>{if(e.target.closest('.cl-x')){CL_OPEN=false;seeAsks([a.id]);return;}
+    if(done){openAnswer(a.id);return;}
     if(a.interview){openIv(a.interview+'.m4a',false);}
     if(done)seeAsks([a.id]);};
 }
