@@ -415,8 +415,12 @@
       <input id="set-key" type="password" autocomplete="off" placeholder="paste the One Button key" />
     </div>
     <label class="chk"><input type="checkbox" id="set-lockfull" /> Show the full list on the lock screen</label>
+    <div class="field">
+      <label for="set-words">Words to listen for</label>
+      <input id="set-words" autocomplete="off" placeholder="e.g. Maya, the shed, seed library" />
+    </div>
     <button class="save" id="set-save">Save</button>
-    <p class="note">Off: the lock screen shows only how many tasks are open.</p>
+    <p class="note">Off: the lock screen shows only how many tasks are open. Words to listen for, separated by commas, get spelled right when you speak them. Names of your people, places and projects are listened for already.</p>
     <div style="height:26px"></div>
     <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What One Button can do</button><button class="tbtn" id="link-device">Link another device</button></div>
     <p class="note hidden" id="link-note"></p>
@@ -642,11 +646,35 @@ function pickMime(){
 }
 // Over LONG_S seconds a recording is a conversation, not a task: it goes up whole (onLong).
 const LONG_S=75;
+// Names and words to listen for, sent with each recording so the transcriber spells them right:
+// people, places, projects and shops already in the app, plus Jay's own list from settings.
+function listenFor(){
+  let w=[];try{w=[...LS.get('ob-words',[]),...contacts.map(c=>c.name),...PLACES.map(p=>p.name),
+    ...PROJ.projects.map(p=>p.name),...SPACES.map(s=>s.name),...shopList()];}catch{}
+  return [...new Set(w.filter(Boolean).map(s=>String(s).trim()))].join(', ').slice(0,600);
+}
+// Send the audio and keep trying while the app is open: a dropped signal or a busy server never
+// costs a recording. Waits grow to two minutes, and a retry goes at once when the signal is back.
+function sendAudio(audio,mimeType){
+  const body=JSON.stringify({audio,mimeType,prompt:listenFor()});
+  return new Promise((ok,fail)=>{let tries=0;
+    const go=()=>fetch(API+'/api/transcribe',{method:'POST',headers:obHeaders(),body})
+      .then(r=>{ if(r.ok) return r.json().then(ok);
+        if(r.status===401) return fail(new Error('transcribe 401'));
+        if(r.status>=400&&r.status<500&&r.status!==429) return fail(new Error('transcribe '+r.status));
+        throw new Error('transcribe '+r.status); })
+      .catch(()=>{tries++;
+        const wait=Math.min(120,2*3**(tries-1))*1000;let t;
+        const now=()=>{clearTimeout(t);removeEventListener('online',now);go();};
+        t=setTimeout(now,wait);addEventListener('online',now);});
+    go();});
+}
 function recognize({onLive,onStart,onEnd,onLong}){
   if(!(navigator.mediaDevices&&window.MediaRecorder)){ onEnd&&onEnd('','no-mic'); return {stop(){}}; }
   let stopEarly=false;
   const handle={stop(){stopEarly=true;}};
-  navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+  // The phone's own noise and echo reduction, for recordings outdoors or in a busy kitchen.
+  navigator.mediaDevices.getUserMedia({audio:{noiseSuppression:true,echoCancellation:true,autoGainControl:true}}).then(stream=>{
     const chunks=[], mime=pickMime();
     const mr=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
     mr.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
@@ -657,9 +685,7 @@ function recognize({onLive,onStart,onEnd,onLong}){
       onLive&&onLive('transcribing...');
       const fr=new FileReader();
       fr.onload=()=>{
-        fetch(API+'/api/transcribe',{method:'POST',headers:obHeaders(),
-          body:JSON.stringify({audio:String(fr.result).split(',')[1],mimeType:blob.type||'audio/webm'})})
-          .then(r=>{ if(!r.ok) throw new Error('transcribe '+r.status); return r.json(); })
+        sendAudio(String(fr.result).split(',')[1],blob.type||'audio/webm')
           .then(d=>onEnd&&onEnd((d.text||'').trim(),null))
           .catch(e=>onEnd&&onEnd('',/ 401$/.test(e.message)?'locked':'transcribe'));
       };
@@ -735,7 +761,7 @@ Return ONLY raw JSON, no markdown:
  "url":"for open with add true: the app's web address, with {q} where search words go if it has a search page",
  "answer":"spoken answer, 1-2 sentences"
 }
-Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "play/put on some music", "play Nina Simone", "navigate/directions/take me to X", "open YouTube", "get me a ride home" -> open, with the artist, genre, song or place in query. "add Spotify to my apps for music" -> open with add true. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. "we have six eggs and some rice", "there's half a bag of flour in the cupboard" -> capture, category have, each thing as its own entry in "items"; "we need", "we're out of", "buy" stay buy. Use channel "auto" unless the user names one. Keep text tight. Today is ${new Date().toISOString()}.`;
+Rules: "remind me", "I noticed", "X is broken", "buy Y", "check Z" are captures. "tell/message/ping/text/whatsapp/dm someone" -> action message. "call/phone/ring someone" -> action call. "book/schedule/add ... to calendar" -> action calendar. "play/put on some music", "play Nina Simone", "navigate/directions/take me to X", "open YouTube", "get me a ride home" -> open, with the artist, genre, song or place in query. "add Spotify to my apps for music" -> open with add true. "set an alarm at 5", "wake me at 6" -> capture, category do, text starting "Alarm" (e.g. "Alarm at 5"), due the next time that comes round. "we have six eggs and some rice", "there's half a bag of flour in the cupboard" -> capture, category have, each thing as its own entry in "items"; "we need", "we're out of", "buy" stay buy. Use channel "auto" unless the user names one. The utterance is a raw voice transcript: in text, message and title drop "um"s, false starts and repeats, fix punctuation and plainly misheard words (above all names of the user's people, places and projects), and never change what they meant. Keep text tight. Today is ${new Date().toISOString()}.`;
 // The user's apps, added to the brain's briefing each time so a new one is known straight away.
 const appsHint=()=>apps.length?`\nThe user's apps: ${apps.map(a=>a.name+' ('+a.job+')').join(', ')}. Put the name in "app" when one is said; otherwise leave it empty and set "job".`:'';
 
@@ -1878,11 +1904,12 @@ function addMissing(list){let added=0,there=0;
   showToast(added?added+' added to Buy'+(there?', '+there+' already there':''):'All of that is on your Buy list already');}
 
 $('#set-save').onclick=()=>{const k=$('#set-key').value.trim(); if(k) LS.set('ob-key',k);
-  LS.set('ob-lockfull',$('#set-lockfull').checked);showToast('Saved');closeSheets();statusEl.textContent='tap to speak';};
+  LS.set('ob-lockfull',$('#set-lockfull').checked);
+  LS.set('ob-words',$('#set-words').value.split(',').map(s=>s.trim()).filter(Boolean));showToast('Saved');closeSheets();statusEl.textContent='tap to speak';};
 
 function openSheet(sel){ closeSheets(); $(sel).classList.add('open');
   if(sel==='#sheet-settings'){$('#set-key').value='';$('#key-field').style.display=NATIVE?'none':'';
-    $('#set-lockfull').checked=LS.get('ob-lockfull',true);renderContacts();renderApps();$('#upd').style.display=NATIVE?'block':'none';renderPlaces();whereNow();}
+    $('#set-lockfull').checked=LS.get('ob-lockfull',true);$('#set-words').value=LS.get('ob-words',[]).join(', ');renderContacts();renderApps();$('#upd').style.display=NATIVE?'block':'none';renderPlaces();whereNow();}
   if(sel==='#sheet-ivs'){renderSpaces();renderInterviews();ivRefresh();spRefresh();}}
 function closeSheets(){document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'));}
 $('#open-proj').onclick=()=>{openSheet('#sheet-proj');renderProj();projRefresh();};
