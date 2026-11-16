@@ -103,6 +103,8 @@
   .al-row .tbtn{min-height:44px}
   .sheet{position:fixed;inset:0;z-index:5;background:var(--cream);color:var(--ink);transform:translateY(100%);transition:transform .32s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   .sheet.open{transform:translateY(0)}
+  .p1-task{border-bottom:1px solid var(--line,#E5E5E5);padding:10px 0}
+  .p1-task.new{border-left:3px solid var(--spark);padding-left:10px;background:var(--cream-2)}
   .sheet-bar{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line)}
   .sheet-bar h2{font-family:"Inter Tight",sans-serif;font-weight:700;font-size:20px;margin:0;color:var(--ink)}
   .sheet-x{background:transparent;border:none;font-size:24px;color:var(--muted);cursor:pointer;width:36px;height:36px}
@@ -1360,8 +1362,7 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   // Tapping a project or a space opens it in place; open ones are remembered.
   const po=LS.get('ob-mainproj',{}),so=LS.get('ob-mainsp',{});
   const row=(p,d)=>{const open=tasksOf(p).filter(n=>!n.done).length;
-    return `<button class="pb-row" data-pb="${p.id}" aria-expanded="${!!po[p.id]}" style="padding-left:${d*18}px"><span>${d?'<span class="pb-sub">&#8627;</span> ':''}${escapeHtml(p.name)}</span><small>${escapeHtml(p.status)}${open?' . '+open+' to do':''}${escapeHtml(stage(p))}</small></button>`
-      +(po[p.id]?`<div class="pb-body" data-pbb="${p.id}"></div>`:'')
+    return `<button class="pb-row" data-pb="${p.id}" style="padding-left:${d*18}px"><span>${d?'<span class="pb-sub">&#8627;</span> ':''}${escapeHtml(p.name)}</span><small>${escapeHtml(p.status)}${open?' . '+open+' to do':''}${escapeHtml(stage(p))}</small></button>`
       +(d<4?kidsOf(p.id).map(k=>row(k,d+1)).join(''):'');};
   const inSpace=new Map(tops.map(p=>[p.id,spacesOfProject(p)]));
   const unplaced=tops.filter(p=>!inSpace.get(p.id).length);
@@ -1390,7 +1391,7 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   box.querySelectorAll('[data-tsp]').forEach(x=>x.onclick=()=>{const sp=spaces[+x.dataset.tsp].sp;so[sp.slug]=!so[sp.slug];LS.set('ob-mainsp',so);renderProjBoard();});
   box.querySelectorAll('[data-osp]').forEach(x=>x.onclick=()=>spOpen(spaces[+x.dataset.osp].sp));
   box.querySelectorAll('[data-ppl]').forEach(x=>x.onclick=()=>{const p=people[+x.dataset.ppl];if(p.sp)spOpen(p.sp);else showToast('No space with '+p.name+' yet. Share a conversation with them to make one.');});
-  box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{po[x.dataset.pb]=!po[x.dataset.pb];LS.set('ob-mainproj',po);renderProjBoard();});
+  box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{const q=PROJ.projects.find(r=>r.id===x.dataset.pb);if(q)openProject(q);});
   box.querySelectorAll('[data-pb]').forEach(x=>holdToOpen(x,PROJ.projects.find(q=>q.id===x.dataset.pb)));
   box.querySelectorAll('[data-pbb]').forEach(x=>projExtra(PROJ.projects.find(q=>q.id===x.dataset.pbb),x,true));
   $('#pb-all').onclick=()=>$('#open-proj').click();}
@@ -1428,6 +1429,30 @@ function renderProj(){const box=$('#proj-list');
   $('#pj-new').onchange=async e=>{const name=e.target.value.trim();if(!name)return;await projSave({name,status:'Idea',source:'you',main:true});renderProj();};}
 let P1=null;
 function openProject(p){P1=p;openSheet('#sheet-p1');renderP1();}
+// A project's page leads with its tasks, each sorted where it stands: done, here for good, to
+// another project, onto the front page, or dropped. New ones (still waiting for a place) say so
+// and come first. Below them, other tasks waiting for a place can be pulled in.
+const waitingTask=n=>!n.done&&!n.deleted&&(n.hold||(!n.triaged&&!n.every&&((n.from&&n.from!=='button')||n.ask||n.photo)&&(n.ts||0)>Date.now()-3*864e5));
+let P1_OPEN=[],P1_OTHER=[];
+function p1Tasks(p,open,done){
+  const fresh=open.filter(waitingTask),rest=open.filter(n=>!waitingTask(n));P1_OPEN=[...fresh,...rest];
+  P1_OTHER=notes.filter(n=>waitingTask(n)&&!open.includes(n));
+  const others=PROJ.projects.filter(x=>projLive(x)&&x.id!==p.id).sort((a,b)=>a.name.localeCompare(b.name));
+  const row=(n,i,isNew)=>`<div class="p1-task${isNew?' new':''}"><div class="note-item" style="border:0;padding:0"><div class="ntext" data-pt="${i}">${escapeHtml(n.text)}<div class="nmeta">${isNew?'New, not sorted yet . ':''}${whenOf(n)||(CAT[n.cat]||{}).label||''}</div></div><button class="ndone" data-pd="${i}" title="Done" aria-label="Done">&#10003;</button></div>
+    <div class="cat-row" style="gap:6px;margin:6px 0 0;align-items:center">${isNew?`<button class="tbtn" data-pkeep="${i}">Keep here</button>`:''}<select class="chip" data-pmove="${i}" aria-label="Move to another project" style="max-width:52%"><option value="">Move to...</option>${others.map(x=>`<option value="${x.id}">${escapeHtml(x.name)}</option>`).join('')}</select><button class="tbtn" data-pfront="${i}">Front page</button><button class="tbtn" data-pdrop="${i}">Drop</button></div></div>`;
+  return `<div class="iv-h">Tasks . ${open.length} to do${fresh.length?' . '+fresh.length+' new':''}</div>`
+    +(P1_OPEN.length?P1_OPEN.map((n,i)=>row(n,i,i<fresh.length)).join(''):'<p class="note">No tasks yet. Speak one to this project.</p>')
+    +(done.length?`<p class="note">${done.length} done</p>`:'')
+    +(P1_OTHER.length?`<details class="p1-pull"><summary class="tbtn" style="display:inline-block;margin:8px 0">Waiting for a place elsewhere (${P1_OTHER.length})</summary>${P1_OTHER.map((n,i)=>`<div class="note-item"><div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${escapeHtml(n.from&&IVS[n.from]&&IVS[n.from].title?'From '+IVS[n.from].title:'')}</div></div><button class="tbtn" data-ppull="${i}">Add here</button></div>`).join('')}</details>`:'');}
+function p1WireTasks(b,p){
+  const place=(n,patch,msg)=>{Object.assign(n,patch,{triaged:true,hold:false,updated:Date.now()});save();renderNotes();renderP1();showToast(msg);};
+  b.querySelectorAll('[data-pt]').forEach(x=>x.onclick=()=>openNote(P1_OPEN[+x.dataset.pt].id));
+  b.querySelectorAll('[data-pd]').forEach(x=>x.onclick=()=>{tick(P1_OPEN[+x.dataset.pd]);save();renderNotes();renderP1();});
+  b.querySelectorAll('[data-pkeep]').forEach(x=>x.onclick=()=>place(P1_OPEN[+x.dataset.pkeep],{project:p.id},'Kept in '+p.name));
+  b.querySelectorAll('[data-pmove]').forEach(x=>x.onchange=e=>{if(e.target.value)place(P1_OPEN[+x.dataset.pmove],{project:e.target.value},'Moved to '+e.target.selectedOptions[0].textContent);});
+  b.querySelectorAll('[data-pfront]').forEach(x=>x.onclick=()=>place(P1_OPEN[+x.dataset.pfront],{project:'front'},'On the front page'));
+  b.querySelectorAll('[data-pdrop]').forEach(x=>x.onclick=()=>place(P1_OPEN[+x.dataset.pdrop],{deleted:true},'Dropped'));
+  b.querySelectorAll('[data-ppull]').forEach(x=>x.onclick=()=>place(P1_OTHER[+x.dataset.ppull],{project:p.id},'Added to '+p.name));}
 function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-title').textContent=p.name;
   const ts=tasksOf(p),open=ts.filter(n=>!n.done),done=ts.filter(n=>n.done);
   const cats=[...new Set(PROJ.projects.map(x=>x.kind).filter(Boolean))].sort(),fam=familyOf(p.id),parents=PROJ.projects.filter(x=>projLive(x)&&!fam.has(x.id)),kids=kidsOf(p.id);
@@ -1436,6 +1461,7 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
   const madeHere=(OFFERS.made||[]).filter(o=>o.project===p.id);
   $('#p1-body').innerHTML=`${p.sharedFrom?`<p class="note"><b>Shared by ${escapeHtml(p.sharedFrom)}.</b> Tasks here live with them; what you add carries your name. <button class="tbtn" id="p1-leave">Leave this project</button></p>`:''}
     <button class="p1-speak" id="p1-speak">${isBuild(p)?'Speak a change to this build':'Speak to this project'}</button><div class="note" id="p1-status"></div>
+    ${p1Tasks(p,open,done)}
     ${!p.sharedFrom?`<div class="iv-row" style="align-items:center;margin:6px 0 10px"><input class="nd-when" id="p1-offer" placeholder="Offer to someone (their One Button name, e.g. simon)" aria-label="Offer this project to" style="flex:1"><button class="tbtn" id="p1-offer-go">Offer</button></div><div class="note" id="p1-offer-note"></div>
       ${madeHere.length?`<p class="note">${madeHere.map(o=>escapeHtml(o.to)+': '+(o.status==='offered'?'offered, waiting':o.status)).join(' . ')}</p>`:''}`:''}
     ${pa.length?`<div class="iv-h">With Claude</div>${pa.map(askCard).join('')}`:''}
@@ -1451,8 +1477,6 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
     <div class="p1-lbl">Part of</div><div><button class="chip${p.parent?'':' on'}" data-pp="">Nothing, it stands alone</button>${parents.map((x,i)=>`<button class="chip${x.id===p.parent?' on':''}" data-pp="${i}">${escapeHtml(x.name)}</button>`).join('')}</div>
     <div class="p1-lbl">Subprojects</div>${kids.map((k,i)=>`<div class="note-item"><div class="ntext" data-pkid="${i}">${escapeHtml(k.name)}<div class="nmeta">${escapeHtml(k.status)}</div></div></div>`).join('')}
     <input class="nd-when" id="p1-sub" placeholder="Add a subproject" aria-label="Add a subproject" style="width:100%">
-    <div class="iv-h">To do (${open.length})</div>${open.map((n,i)=>`<div class="note-item"><div class="ntext" data-pt="${i}">${escapeHtml(n.text)}<div class="nmeta">${whenOf(n)||CAT[n.cat].label}</div></div><button class="ndone" data-pd="${i}" title="done">&#10003;</button></div>`).join('')||'<p class="note">No tasks yet. Link one from its task screen.</p>'}
-    ${done.length?`<p class="note">${done.length} done</p>`:''}
     <div class="iv-h">Conversations</div>${convs.map((c,i)=>`<div class="note-item"><div class="ntext" data-pc="${i}">${escapeHtml(c.s.title||c.id)}<div class="nmeta">${(c.s.people||[]).length?'with '+escapeHtml(c.s.people.join(', ')):''}</div></div><button class="p1-x" data-pcx="${i}" aria-label="Take this conversation off the project">&times;</button></div>`).join('')||'<p class="note">None yet.</p>'}
     ${more.length?`<details><summary class="tbtn" style="display:inline-block;margin-top:6px">Add a conversation</summary>${more.map((s,i)=>`<div class="note-item"><div class="ntext" data-pca="${i}">${escapeHtml(s.title||s.id)}<div class="nmeta">${new Date(s.created||0).toLocaleDateString()}${(s.people||[]).length?' . with '+escapeHtml(s.people.join(', ')):''}</div></div></div>`).join('')}</details>`:''}`;
   const b=$('#p1-body');wireAskCards(b);
@@ -1475,8 +1499,7 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
   $('#p1-sub').onchange=async e=>{const name=e.target.value.trim();if(!name)return;await projSave({name,status:'Idea',source:'you',kind:p.kind||'',parent:p.id});renderP1();};
   b.querySelectorAll('[data-pcx]').forEach(x=>x.onclick=()=>put({from:(p.from||[]).filter(id=>id!==convs[+x.dataset.pcx].id)}));
   b.querySelectorAll('[data-pca]').forEach(x=>x.onclick=()=>put({from:[...(p.from||[]),more[+x.dataset.pca].id]}));
-  b.querySelectorAll('[data-pt]').forEach(x=>x.onclick=()=>openNote(open[+x.dataset.pt].id));
-  b.querySelectorAll('[data-pd]').forEach(x=>x.onclick=()=>{tick(open[+x.dataset.pd]);save();renderNotes();renderP1();});
+  p1WireTasks(b,p);
   b.querySelectorAll('[data-pc]').forEach(x=>x.onclick=()=>openIv(convs[+x.dataset.pc].id+'.m4a',false));}
 // On a task: which project it belongs to.
 // On a task or idea: send it into a conversation space, where everyone in it sees it as a note
@@ -2025,7 +2048,7 @@ function renderLock(){
       row.innerHTML=`<div class="lk-text">${escapeHtml(p.name)}<div style="font-size:13px;opacity:.75;margin-top:2px">${escapeHtml(p.status)}${open?' . '+open+' to do':''}${b?' . '+escapeHtml(STAGE_LABEL[askStage(b)]):''}</div></div>`;
       const po=LS.get('ob-lockproj',{});row.setAttribute('aria-expanded',!!po[p.id]);if(po[p.id])row.classList.add('open');
       row.querySelector('.lk-text').insertAdjacentHTML('afterend','<svg class="lk-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>');
-      row.onclick=()=>{po[p.id]=!po[p.id];LS.set('ob-lockproj',po);renderLock();};if(p.id)holdToOpen(row,p,hideLock);lkList.appendChild(row);
+      row.onclick=()=>{if(p.id){hideLock();openProject(p);}else{po[p.id]=!po[p.id];LS.set('ob-lockproj',po);renderLock();}};if(p.id)holdToOpen(row,p,hideLock);lkList.appendChild(row);
       if(po[p.id])lkList.appendChild(lockProjectBody(p));}
     for(const n of group){
       const row=document.createElement('div');row.className='lk-item';
@@ -2065,7 +2088,7 @@ function lockProjectBody(p,depth=0){const box=document.createElement('div');box.
   const po=LS.get('ob-lockproj',{});
   for(const k of kids){const row=document.createElement('button');row.className='lk-item lk-proj'+(po[k.id]?' open':'');row.setAttribute('aria-expanded',!!po[k.id]);
     const c=openCount(k);row.innerHTML=`<div class="lk-text">${escapeHtml(k.name)}<div style="font-size:13px;opacity:.75;margin-top:2px">${c?c+' to do':'nothing open'}</div></div><svg class="lk-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
-    row.onclick=()=>{po[k.id]=!po[k.id];LS.set('ob-lockproj',po);renderLock();};holdToOpen(row,k,hideLock);box.appendChild(row);
+    row.onclick=()=>{hideLock();openProject(k);};holdToOpen(row,k,hideLock);box.appendChild(row);
     if(po[k.id])box.appendChild(lockProjectBody(k,depth+1));}
   return box;}
 function showLock(){stopSaver();closeSheets();lock.classList.add('on');lockClock();loadEvents();
