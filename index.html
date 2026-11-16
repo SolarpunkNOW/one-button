@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -571,7 +571,11 @@ const orb=$('#orb'), shell=$('#shell'), statusEl=$('#status'), heard=$('#heard')
       rBody=$('#result-body'), rActs=$('#result-acts'), hint=$('#hint'), toast=$('#toast');
 for(let i=0;i<7;i++){levels.appendChild(document.createElement('i'));}
 const bars=[...levels.children];
-function showToast(m){toast.textContent=m;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),2800);}
+// Notices live in the yellow bar, not a pop-up: a short one shows for a few seconds, then the bar
+// goes back to what it was showing (an update waiting, or Today's wins).
+let NOTICE=null,NOTICE_T=null;
+function barNotice(text,go,ms){NOTICE={text,go:go||null,until:ms?Date.now()+ms:0};clearTimeout(NOTICE_T);if(ms)NOTICE_T=setTimeout(()=>{if(NOTICE&&NOTICE.until&&Date.now()>=NOTICE.until){NOTICE=null;renderBar();}},ms+50);renderBar();}
+function showToast(m){barNotice(m,null,4500);}
 function save(){ LS.set('ob-notes',notes); queueSync(); syncAlarms(); }
 
 /* Sync (stage 1): the server keeps the master copy so phone and browser agree. Per task, the
@@ -2460,18 +2464,21 @@ function ivAuto(){
 // Main screen strip: what Claude is doing with your asks, and its answers until you've seen them.
 let SEEN=LS.get('ob-asks-seen',[]);
 function seeAsks(ids){SEEN=[...new Set([...SEEN,...ids])].slice(-200);LS.set('ob-asks-seen',SEEN);renderClaude();}
+let CL_OPEN=false; // the answer card shows once the bar notice is tapped
 function renderClaude(){
   renderBuilds();
   const box=$('#claude-strip'); if(!box)return;
   const pend=ASKS.filter(a=>a.status!=='done'&&a.kind!=='app'), fresh=ASKS.filter(a=>a.status==='done'&&a.kind!=='app'&&!SEEN.includes(a.id));
-  const a=fresh[0]||pend[0]; if(!a){box.innerHTML='';return;}
+  const a=fresh[0]||pend[0]; if(!a){box.innerHTML='';if(NOTICE&&NOTICE.claude){NOTICE=null;renderBar();}return;}
+  if(fresh.length&&!CL_OPEN){const w=askWords(fresh[0]);NOTICE={text:'Claude answered'+(fresh.length>1?' ('+fresh.length+')':'')+': '+(w.length>60?w.slice(0,59)+'…':w),until:0,claude:true,
+      go:()=>{CL_OPEN=true;renderClaude();const s=$('#claude-strip');if(s)s.scrollIntoView({behavior:'smooth',block:'center'});}};renderBar();box.innerHTML='';return;}
   const n=fresh.length?fresh.length:pend.length, done=a.status==='done';
   const tag=done?`Claude answered${n>1?' . '+n+' new':''}`:`Claude is working${n>1?' on '+n:''}`;
   const body=done?`<div class="cl-ans">${escapeHtml(a.answer||'')}</div>${a.tasks?`<div class="iv-tag">${a.tasks} task${a.tasks>1?'s':''} waiting for you to place</div>`:''}`
     :`<div class="cl-ans">${escapeHtml(a.text||'')}</div><div class="iv-tag">your laptop picks it up within 5 minutes when it is on</div>`;
   box.innerHTML=`<div class="cl-strip" role="button" tabindex="0"><span class="cl-dot${done?' done':''}"></span><div class="cl-text"><div class="iv-tag">${tag}</div>${body}</div>${done?'<button class="cl-x" aria-label="Dismiss">&times;</button>':''}</div>`;
   const strip=box.firstChild;
-  strip.onclick=e=>{if(e.target.closest('.cl-x')){seeAsks([a.id]);return;}
+  strip.onclick=e=>{if(e.target.closest('.cl-x')){CL_OPEN=false;seeAsks([a.id]);return;}
     if(a.interview){openIv(a.interview+'.m4a',false);}
     if(done)seeAsks([a.id]);};
 }
@@ -2751,21 +2758,30 @@ function renderChanges(){const box=$('#changes-body'),on=LS.get('ob-changes',{})
   box.querySelectorAll('[data-cx]').forEach(b=>b.onclick=()=>{const o=LS.get('ob-changes',{});delete o[b.dataset.cx];LS.set('ob-changes',o);
     try{sessionStorage.setItem('ob-try',JSON.stringify(JSON.parse(sessionStorage.getItem('ob-try')||'[]').filter(x=>x!==b.dataset.cx)));}catch{}redo();});}
 let VER_SEEN=null;
+// What the phone app says while it updates itself.
+window.obUpdate=(state,why)=>{const say={downloading:'Downloading the new build…',ready:'Downloaded. Opening the installer.',allow:'Android asks once: allow One Button to install updates, then come back.',failed:'The update did not download: '+(why||'try again')}[state];if(say)showToast(say);};
+let UPD={text:'',go:null};
+function renderBar(){const n=NOTICE&&(!NOTICE.until||Date.now()<NOTICE.until)?NOTICE:null;
+  for(const b of [$('#lk-upd'),$('#main-upd'),$('#set-upd')]){if(!b)continue;const use=b.id==='set-upd'?(UPD.text?UPD:null):(n||(UPD.text?UPD:null));
+    b.textContent=use?use.text:'';b.hidden=!use;b.classList.toggle('hidden',!use);b.onclick=use&&use.go?()=>{const g=use.go;if(use===NOTICE){NOTICE=null;}g();renderBar();}:(use===NOTICE?()=>{NOTICE=null;renderBar();}:null);}
+  try{renderWins();}catch(e){}}
 function checkUpdate(){
-  fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{
+  // The newest phone build: what the build pipeline last handed to the server, else the stamp on the site.
+  const appInfo=obKey()?fetch(API+'/api/app/info',{method:'POST',headers:obHeaders(),body:'{}'}).then(r=>r.ok?r.json():{}).catch(()=>({})):Promise.resolve({});
+  Promise.all([fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null),appInfo]).then(([v,ai])=>{
     if(!v)return;
+    if(ai&&ai.build>(v.android||0))v.android=ai.build;
     if(VER_SEEN===null)VER_SEEN=v.web||'';
     const mine=NATIVE&&NATIVE.build?NATIVE.build():0;
     let text='',go=null;
     // A newer phone build: the app downloads it and opens the installer itself when it can;
     // older builds go straight to the file on GitHub in the browser, then open the download.
     if(mine&&v.android>mine){text='Build '+v.android+' is ready, you have '+mine+'. Tap to install.';
-      go=()=>{if(NATIVE.installUpdate){NATIVE.installUpdate();showToast('Downloading build '+v.android+'. The installer opens when it is down.');}else location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
+      go=()=>{if(NATIVE.installUpdate){NATIVE.installUpdate();}else location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
     // A newer page only brings fixes and switched-off changes, so loading it is safe; it opens on the list.
     else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='One Button has new changes. Tap to look at them.';go=()=>{location.hash='changes';location.reload();};}
     else if(changesNew().length){const n=changesNew().length;text=n+' new change'+(n>1?'s':'')+' to look at.';go=openChanges;}
-    for(const b of [$('#lk-upd'),$('#main-upd'),$('#set-upd')]){if(!b)continue;b.textContent=text;b.hidden=!text;b.classList.toggle('hidden',!text);b.onclick=go;}
-    renderWins();
+    UPD={text,go};renderBar();
   }).catch(()=>{});
 }
 setInterval(checkUpdate,10*60e3);
