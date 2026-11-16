@@ -15,7 +15,7 @@
   [hidden],.hidden{display:none!important}
   body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   .wrap{max-width:760px;margin:0 auto;padding:0 16px 64px}
-  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px;position:sticky;top:0;z-index:20;background:var(--paper,var(--cream,#FFFFFF))}
   .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
   .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
   .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
@@ -153,6 +153,20 @@ function load(){return post('get',{slug:SLUG}).then(render).catch(e=>{$('#body')
 if(INVITE)join();
 else if(KEY)load();
 else weave(()=>W.check(COM).then(r=>load()).catch(()=>load()));
+</script>
+<script>
+/* A way out, always. Inside the app's frame: links to another One Button page stay in the frame
+ * (a new window would replace the whole app). Loaded on its own inside the phone app: a Close
+ * button pinned to the top corner goes back to the app. */
+(function(){
+  const inFrame=window.parent!==window,inApp=!!window.OBNative;
+  document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[target="_blank"]');if(!a)return;
+    let u;try{u=new URL(a.href,location.href);}catch(_){return;}
+    if(u.host===location.host&&(inFrame||inApp)){e.preventDefault();location.href=u.href;}},true);
+  if(!inFrame&&inApp){const b=document.createElement('button');b.textContent='Close';b.setAttribute('aria-label','Close and go back to One Button');
+    b.style.cssText='position:fixed;top:calc(10px + env(safe-area-inset-top));right:12px;z-index:999;font:600 15px Inter,sans-serif;background:#1A1A1A;color:#fff;border:0;padding:10px 16px;min-height:44px;cursor:pointer';
+    b.onclick=()=>location.replace('/');document.body.appendChild(b);}
+})();
 </script>
 </body>
 </html>
