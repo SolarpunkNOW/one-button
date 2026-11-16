@@ -179,7 +179,7 @@ async function shopSource(body) {
 // Tasks live as lists, one per person; the key says whose. Open routes (a shared space read
 // with a Weave token) fall back to Jay's.
 const ID_RE_T = /^[\w-]{1,80}$/;
-const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by", "triaged", "prov"];
+const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by", "triaged", "prov", "spaces"];
 
 function cleanTask(t) {
   const o = { id: String(t.id) };
@@ -191,6 +191,7 @@ function cleanTask(t) {
   if (o.hist !== undefined) o.hist = (Array.isArray(o.hist) ? o.hist : []).slice(-12).map(Number).filter((x) => x > 0);
   if (o.every !== undefined) o.every = Math.max(0, Math.min(366, Number(o.every) || 0));
   if (o.by !== undefined) o.by = String(o.by).slice(0, 40);
+  if (o.spaces !== undefined) o.spaces = (Array.isArray(o.spaces) ? o.spaces : []).map(String).filter((x) => /^[a-z0-9-]{3,40}$/.test(x)).slice(0, 30);
   // Provenance: the conversation, the second and the words a task rests on. Kept small.
   if (o.prov !== undefined) o.prov = o.prov && typeof o.prov === "object" ? { conv: String(o.prov.conv || "").slice(0, 80), at: Math.max(0, Number(o.prov.at) || 0), quote: String(o.prov.quote || "").slice(0, 240) } : null;
   return o;

@@ -378,6 +378,7 @@
     <div class="nd-edit"><input class="nd-when" id="nd-when" placeholder="When, e.g. Friday" aria-label="When" /></div>
     <div class="nd-edit" id="nd-place"></div>
     <div class="nd-edit" id="nd-proj"></div>
+    <div class="nd-edit" id="nd-space"></div>
     <div id="nd-more"></div>
     <div class="nd-edit" id="nd-alarm"></div>
     <div class="nd-edit" id="nd-every" aria-label="Repeats"></div>
@@ -1272,7 +1273,14 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   box.innerHTML=`<div class="pb-top"><span class="sec-lbl">Projects</span><button class="tbtn" id="pb-all">Add or sort</button></div>`
     +(tops.length?cats.map(c=>`<div class="pb-cat">${escapeHtml(c||'No category yet')}</div>`+tops.filter(p=>(p.kind||'')===c).sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name)).map(p=>row(p,0)).join('')).join('')
       :'<p class="note">No projects yet. Tap Add or sort.</p>')
+    // Conversation spaces: one per person or group, beside the projects, one tap to open.
+    +`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">Conversation spaces</span></div>`
+    +(SPACES.length||WITH_ME.length?[...WITH_ME.map(sp=>({sp,label:sp.name+' and you',meta:`${sp.convs} conversation${sp.convs===1?'':'s'}`})),
+        ...SPACES.map(sp=>({sp,label:'Jay and '+sp.name,meta:`${sp.convs} conversation${sp.convs===1?'':'s'} . ${sp.joined?'joined':'not joined yet'}${sp.fresh?' . '+sp.fresh+' new from them':''}`}))]
+      .map((x,i)=>`<button class="pb-row" data-psp="${i}"><span>${escapeHtml(x.label)}</span><small>${escapeHtml(x.meta)}</small></button>`).join('')
+      :'<p class="note">No spaces yet. Finish a conversation and tap Share into a space.</p>')
     +'<div class="pb-cat" style="margin-top:26px">Tasks</div>';
+  {const all=[...WITH_ME,...SPACES];box.querySelectorAll('[data-psp]').forEach(x=>x.onclick=()=>spOpen(all[+x.dataset.psp]));}
   box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{po[x.dataset.pb]=!po[x.dataset.pb];LS.set('ob-mainproj',po);renderProjBoard();});
   box.querySelectorAll('[data-pb]').forEach(x=>holdToOpen(x,PROJ.projects.find(q=>q.id===x.dataset.pb)));
   box.querySelectorAll('[data-pbb]').forEach(x=>projExtra(PROJ.projects.find(q=>q.id===x.dataset.pbb),x,true));
@@ -1362,7 +1370,16 @@ function renderP1(){const p=PROJ.projects.find(x=>x.id===P1.id)||P1;P1=p;$('#p1-
   b.querySelectorAll('[data-pd]').forEach(x=>x.onclick=()=>{tick(open[+x.dataset.pd]);save();renderNotes();renderP1();});
   b.querySelectorAll('[data-pc]').forEach(x=>x.onclick=()=>openIv(convs[+x.dataset.pc].id+'.m4a',false));}
 // On a task: which project it belongs to.
-function renderTaskProject(n){const box=$('#nd-proj');if(!box)return;const live=PROJ.projects.filter(projLive);
+// On a task or idea: send it into a conversation space, where everyone in it sees it as a note
+// from Jay. Spaces it has gone to are remembered on the task.
+function renderTaskSpace(n){const box=$('#nd-space');if(!box)return;if(!SPACES.length){box.innerHTML='';return;}
+  const sent=n.spaces||[];
+  box.innerHTML='<span class="nmeta" style="margin-right:6px">Share into</span>'+SPACES.map((sp,i)=>`<button class="chip${sent.includes(sp.slug)?' on':''}" data-tsp="${i}">${escapeHtml(sp.name)}</button>`).join('');
+  box.querySelectorAll('[data-tsp]').forEach(b=>b.onclick=async()=>{const sp=SPACES[+b.dataset.tsp];if(sent.includes(sp.slug)){showToast('Already in the space with '+sp.name);return;}
+    b.disabled=true;try{const r=await fetch(API+'/api/space/add',{method:'POST',headers:obHeaders(),body:JSON.stringify({slug:sp.slug,kind:'note',text:n.text+(n.note?'\n\n'+n.note:''),conv:n.prov&&n.prov.conv||''})});
+      if(!r.ok)throw 0;n.spaces=[...sent,sp.slug];n.updated=Date.now();save();showToast('Shared into the space with '+sp.name);renderTaskSpace(n);}
+    catch{b.disabled=false;showToast('Could not share it, try again');}});}
+function renderTaskProject(n){renderTaskSpace(n);const box=$('#nd-proj');if(!box)return;const live=PROJ.projects.filter(projLive);
   if(!live.length){box.innerHTML='';return;}
   box.innerHTML='<span class="nmeta" style="margin-right:6px">Project</span>'+live.map((p,i)=>`<button class="chip${n.project===p.id?' on':''}" data-tp="${i}">${escapeHtml(p.name)}</button>`).join('');
   box.querySelectorAll('[data-tp]').forEach(b=>b.onclick=()=>{const p=live[+b.dataset.tp];n.project=n.project===p.id?'':p.id;save();renderProjMain();renderTaskProject(n);});}
@@ -2070,7 +2087,7 @@ function renderIv(){
   const id=ivId(name), s=IVS[id]||{}, f=ivFiles().find(x=>x.name===name)||{ts:Date.now(),size:0}, b=$('#iv-body');
   $('#iv-title').textContent=s.title||'Interview';
   let h=`<p class="iv-meta">${ivWhen(f.ts)} . ${(f.size/1048576).toFixed(1)} MB${s.people&&s.people.length?' . with '+escapeHtml(s.people.join(', ')):''}</p>
-    <div class="iv-row"><button class="save" id="iv-share">Share recording with them</button></div>`;
+    <div class="iv-row">${s.status==='done'?'<button class="save" id="iv-toshare">Share into a space</button>':''}<button class="tbtn" id="iv-share">Send the recording file</button></div>`;
   // Who it was with: the note step only names people it hears in the conversation, so this is
   // where Jay confirms or corrects it. Recent partners come first; a change refiles it on the laptop.
   if(s.status==='done'){
@@ -2089,7 +2106,7 @@ function renderIv(){
   // conversation in each space; a link is only sent to someone who has not joined yet.
   if(s.status==='done'){
     const heard=(s.people||[]),names=[...heard,...SPACES.map(sp=>sp.name).filter(n=>!heard.some(p=>String(p).toLowerCase()===String(n).toLowerCase()))];
-    h+=`<div class="iv-h">Share with</div>`;
+    h+=`<div class="iv-h" id="iv-sharebox">Share into a space</div>`;
     names.forEach(p=>{const sp=spOf(p),inIt=!!(sp&&(sp.ivs||[]).includes(id)),isHeard=heard.includes(p);
       h+=`<label class="iv-row" style="align-items:center;cursor:pointer"><input type="checkbox" data-spwith="${escapeHtml(p)}" ${isHeard&&!inIt?'checked':''} ${inIt?'disabled':''} style="width:22px;height:22px;margin-right:10px">
         <span style="flex:1">${escapeHtml(p)}<span class="iv-tag">${inIt?'shared'+(sp.joined?' . joined':' . not joined yet'):sp?(sp.joined?'joined':'not joined yet'):'new space'}${isHeard?' . in this conversation':''}</span></span>
@@ -2133,6 +2150,7 @@ function renderIv(){
   $('#iv-share').onclick=()=>NATIVE&&NATIVE.shareInterview(name);
   b.querySelectorAll('[data-spopen]').forEach(x=>x.onclick=e=>{e.preventDefault();spOpen(spOf(x.dataset.spopen));});
   b.querySelectorAll('[data-spsend]').forEach(x=>x.onclick=e=>{e.preventDefault();spSendPerson(x.dataset.spsend,id,x);});
+  const ts2=$('#iv-toshare'); if(ts2) ts2.onclick=()=>{const x=$('#iv-sharebox');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});};
   const st2=$('#iv-shareto'); if(st2) st2.onclick=async()=>{
     const names=[...b.querySelectorAll('[data-spwith]:checked')].map(c=>c.dataset.spwith);
     const extra=($('#iv-spnew').value||'').trim(); if(extra)names.push(extra);
@@ -2199,7 +2217,7 @@ let SPACES=LS.get('ob-spaces',[]);
 async function spRefresh(){
   if(!obKey())return;
   try{const r=await fetch(API+'/api/space/list',{method:'POST',headers:obHeaders(),body:'{}'});
-    if(!r.ok)return; const d=await r.json(); SPACES=d.spaces||[]; WITH_ME=d.withMe||[]; LS.set('ob-spaces',SPACES); LS.set('ob-withme',WITH_ME); renderSpaces(); if(ivOpen)renderIv();
+    if(!r.ok)return; const d=await r.json(); SPACES=d.spaces||[]; WITH_ME=d.withMe||[]; LS.set('ob-spaces',SPACES); LS.set('ob-withme',WITH_ME); renderSpaces(); try{renderProjBoard();}catch{} if(ivOpen)renderIv();
   }catch{}
 }
 let WITH_ME=LS.get('ob-withme',[]);

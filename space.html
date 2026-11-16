@@ -28,6 +28,7 @@
   button,.btn{font:600 14px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--ink);
     padding:10px 14px;min-height:44px;cursor:pointer;border-radius:0;transition:background .15s}
   button:hover{background:var(--surface)}
+  a.btn{display:inline-flex;align-items:center;text-decoration:none}
   button.on{background:var(--ink);color:var(--paper)}
   button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
   .link{background:none;border:0;padding:0;min-height:0;text-decoration:underline;color:var(--muted);font-weight:500}
@@ -281,6 +282,11 @@ document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.da
   if(t){t.classList.remove('hidden');words(id);}box.scrollIntoView({behavior:'smooth',block:'start'});
   const c=conv(id);if(c.audio&&ACT&&at)listen(id,at);});
 
+// Share-out for anything already agreed and public: the big apps by their own share links, and the
+// phone's share sheet for the rest (Instagram, Signal, email...). Only public links ever go out.
+const shareOut=(url,title)=>{const u=encodeURIComponent(url),t=encodeURIComponent(title+' '),both=encodeURIComponent(title+' '+url);
+  return `<span class="tag">Share out</span><a class="btn" href="https://t.me/share/url?url=${u}&text=${t}" target="_blank" rel="noopener">Telegram</a><a class="btn" href="https://wa.me/?text=${both}" target="_blank" rel="noopener">WhatsApp</a><a class="btn" href="https://www.facebook.com/sharer/sharer.php?u=${u}" target="_blank" rel="noopener">Facebook</a><a class="btn" href="https://www.linkedin.com/sharing/share-offsite/?url=${u}" target="_blank" rel="noopener">LinkedIn</a>${navigator.share?`<button data-native="${esc(url)}" data-title="${esc(title)}">More, including Instagram</button>`:''}`;};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-native]');if(!b)return;navigator.share({title:b.dataset.title,text:b.dataset.title,url:b.dataset.native}).catch(()=>{});});
 // Highlights: consent per person, then out to a public page or (host only) into another space.
 const hls=D.docs.filter(d=>d.kind==='Highlight');
 $('#hl-make').classList.toggle('hidden',!ACT);
@@ -292,7 +298,7 @@ $('#highlights').innerHTML=hls.length?hls.map(h=>{const cs=Object.entries(h.cons
     <div class="row">${mine==='pending'&&ACT?`<button data-hlok="${esc(h.id)}">Yes, this can travel</button><button class="link" data-hlno="${esc(h.id)}">Not this one</button>`:''}
       ${ACT?`<button class="link" data-hlprev="${esc(h.id)}">Preview the public page</button>`:''}
       ${all&&ACT&&h.visibility!=='public'&&h.visibility!=='shared'?`<button data-hlpub="${esc(h.id)}">Make a public link</button>`:''}
-      ${h.link?`<a href="${esc(h.link)}" target="_blank" rel="noopener">Open the public page</a> <button class="link" data-hlcopy="${esc(h.link)}">Copy link</button>${ACT?` <button class="link" data-hlback="${esc(h.id)}">Take it back</button>`:''}`:''}
+      ${h.link?`<a href="${esc(h.link)}" target="_blank" rel="noopener">Open the public page</a> <button class="link" data-hlcopy="${esc(h.link)}">Copy link</button>${ACT?` <button class="link" data-hlback="${esc(h.id)}">Take it back</button>`:''}</div><div class="row">${shareOut(h.link,h.title)}`:''}
       ${all&&ACT&&ACT.key&&h.visibility!=='shared'?`<select data-hlto="${esc(h.id)}" aria-label="Into another space"><option value="">Into another space...</option></select>`:''}</div></div>`;}).join('')
   :'<p class="tag">No highlights yet.</p>';
 const hlCall=actCall;
