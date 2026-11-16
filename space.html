@@ -128,7 +128,7 @@
   <p class="lede">What arrives on a day something changed.</p>
   <div class="mail" id="mail"></div>
 
-  <p class="tag" style="margin-top:40px">Only the people in these conversations can open this space. <button class="link" id="leave">Leave this space</button></p>
+  <p class="tag" style="margin-top:40px">Only the people in these conversations can open this space. <button class="link" id="export">Download this space</button> . <button class="link" id="leave">Leave this space</button></p>
   </div>
 </div>
 
@@ -192,6 +192,10 @@ document.querySelectorAll('#how button').forEach(b=>b.onclick=()=>{
   $('#how-note').textContent={email:'One email a day at most, only when something changed.',page:'Nothing is sent. What is new shows here when you visit.',pause:'Paused. Nothing is sent until you turn it back on.'}[b.dataset.how];
 });
 $('#leave').onclick=e=>{e.target.replaceWith('(In the live page this removes you from the space and stops all updates.)');};
+// The whole space as one file to keep: conversations with their words, tasks, projects, highlights.
+$('#export').onclick=e=>{if(!ACT){e.target.replaceWith('(Available once you are signed in.)');return;}e.target.textContent='Preparing…';
+  actCall('export',{slug:SLUG}).then(x=>{const bl=new Blob([JSON.stringify(x,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='space-'+SLUG+'-'+new Date().toISOString().slice(0,10)+'.json';a.click();e.target.textContent='Download this space';})
+    .catch(err=>{e.target.textContent='Could not export: '+err.message;});};
 // Home screen: the address it saves carries the sign-in, so the icon opens straight in.
 $('#home').classList.toggle('hidden',!KEEP);
 $('#home-go').onclick=()=>{
@@ -243,7 +247,7 @@ const byTag=x=>x.by?(x.by==='claude'?' . written by Claude':' . added by '+esc(n
 // Provenance: the conversation, the moment and the words a thing rests on. Tapping opens the transcript.
 const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
 const provLine=x=>{const p=x.prov;if(!p||!p.conv)return '';const c=conv(p.conv);
-  return `<span class="tag" style="display:block;margin-top:3px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(p.conv)}">From ${esc(c.title||'a conversation')}${p.at?' at '+mmss(p.at):''}</button>${p.quote?`: "${esc(p.quote)}"`:''}</span>`;};
+  return `<span class="tag" style="display:block;margin-top:3px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(p.conv)}" data-at="${+p.at||0}">From ${esc(c.title||'a conversation')}${p.at?' at '+mmss(p.at):''}</button>${p.quote?`: "${esc(p.quote)}"`:''}</span>`;};
 const ME=ACT&&ACT.key?'jay':D.viewer;
 $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-${p.id}">
   <span class="tag">${esc(p.status)}${byTag(p)}${p.held?' . held, only you see this: '+esc(p.held):''}</span><h3>${esc(p.name)}</h3><div>${esc(p.about)}</div>${provLine(p)}
@@ -258,12 +262,24 @@ $('#tasks').innerHTML=groups.map(([who,label])=>{const ts=D.tasks.filter(t=>t.wh
 
 $('#convs').innerHTML=D.convs.map(c=>`<div class="box conv" id="conv-${esc(c.id)}">
   <span class="tag">${ACT?`<input type="checkbox" data-hl="${esc(c.id)}" style="width:18px;height:18px;vertical-align:middle;margin-right:8px" aria-label="Use in a highlight">`:''}${esc(c.date)}${c.mins?' . '+c.mins+' min':''}${byTag(c)}</span><h3>${esc(c.title)}</h3><div>${esc(c.summary)}</div>
-  <div class="row">${c.audio?'<button disabled title="Plays in the live page">Play recording</button>':''}${c.transcript?`<button data-tr="${c.id}">Read transcript</button>`:''}</div>${c.note?`<p class="tag" style="margin:8px 0 0">${esc(c.note)}</p>`:''}
-  <div class="tr hidden" id="tr-${c.id}">${esc(c.transcript||'')}</div></div>`).join('');
+  <div class="row">${c.audio&&ACT?`<button data-au="${esc(c.id)}">Play recording</button>`:''}${(c.transcript||c.heavy||ACT)?`<button data-tr="${esc(c.id)}">Read transcript</button>`:''}</div><div class="hidden" id="au-${esc(c.id)}" style="margin-top:10px"></div>${c.note?`<p class="tag" style="margin:8px 0 0">${esc(c.note)}</p>`:''}
+  <div class="tr hidden" id="tr-${esc(c.id)}">${esc(c.transcript||'')}</div></div>`).join('');
+// The words of a conversation come down only when asked for; the recording too.
+const words=id=>{const t=$('#tr-'+id);if(!t)return Promise.resolve();if(t.textContent.trim()||!ACT)return Promise.resolve();t.textContent='Fetching the words…';
+  return actCall('transcript',{slug:SLUG,conv:id}).then(r=>{t.textContent=r.transcript||'(no transcript)';}).catch(e=>{t.textContent='Could not fetch the words: '+e.message;});};
+const listen=(id,at)=>{const box=$('#au-'+id);if(!box)return;let a=box.querySelector('audio');
+  if(a){box.classList.remove('hidden');if(at)a.currentTime=at;a.play().catch(()=>{});return;}
+  box.classList.remove('hidden');box.textContent='Fetching the recording…';
+  fetch(API+'audio?slug='+encodeURIComponent(SLUG)+'&conv='+encodeURIComponent(id)+tokenQ(),{method:'POST',headers:headers()})
+    .then(r=>{if(!r.ok)return r.json().then(d=>Promise.reject(new Error(d.error||r.status)));return r.blob();})
+    .then(bl=>{box.innerHTML='';a=document.createElement('audio');a.controls=true;a.style.width='100%';a.src=URL.createObjectURL(bl);box.appendChild(a);if(at)a.currentTime=at;a.play().catch(()=>{});})
+    .catch(e=>{box.textContent='Could not play it: '+e.message;});};
 document.querySelectorAll('[data-tr]').forEach(b=>b.onclick=()=>{const t=$('#tr-'+b.dataset.tr);t.classList.toggle('hidden');
-  b.textContent=t.classList.contains('hidden')?'Read transcript':'Hide transcript';});
-document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.dataset.prov,box=$('#conv-'+id),t=$('#tr-'+id);if(!box)return;
-  if(t)t.classList.remove('hidden');box.scrollIntoView({behavior:'smooth',block:'start'});});
+  b.textContent=t.classList.contains('hidden')?'Read transcript':'Hide transcript';if(!t.classList.contains('hidden'))words(b.dataset.tr);});
+document.querySelectorAll('[data-au]').forEach(b=>b.onclick=()=>listen(b.dataset.au,0));
+document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.dataset.prov,at=+b.dataset.at||0,box=$('#conv-'+id),t=$('#tr-'+id);if(!box)return;
+  if(t){t.classList.remove('hidden');words(id);}box.scrollIntoView({behavior:'smooth',block:'start'});
+  const c=conv(id);if(c.audio&&ACT&&at)listen(id,at);});
 
 // Highlights: consent per person, then out to a public page or (host only) into another space.
 const hls=D.docs.filter(d=>d.kind==='Highlight');
@@ -274,11 +290,12 @@ $('#highlights').innerHTML=hls.length?hls.map(h=>{const cs=Object.entries(h.cons
     ${(h.quotes||[]).length?h.quotes.map(q=>`<div class="quote">${esc(q.text)}${provLine(q)}</div>`).join(''):''}
     ${cs.length?`<div class="row" style="align-items:center">${cs.map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join('')}</div>`:''}
     <div class="row">${mine==='pending'&&ACT?`<button data-hlok="${esc(h.id)}">Yes, this can travel</button><button class="link" data-hlno="${esc(h.id)}">Not this one</button>`:''}
+      ${ACT?`<button class="link" data-hlprev="${esc(h.id)}">Preview the public page</button>`:''}
       ${all&&ACT&&h.visibility!=='public'&&h.visibility!=='shared'?`<button data-hlpub="${esc(h.id)}">Make a public link</button>`:''}
       ${h.link?`<a href="${esc(h.link)}" target="_blank" rel="noopener">Open the public page</a> <button class="link" data-hlcopy="${esc(h.link)}">Copy link</button>${ACT?` <button class="link" data-hlback="${esc(h.id)}">Take it back</button>`:''}`:''}
       ${all&&ACT&&ACT.key&&h.visibility!=='shared'?`<select data-hlto="${esc(h.id)}" aria-label="Into another space"><option value="">Into another space...</option></select>`:''}</div></div>`;}).join('')
   :'<p class="tag">No highlights yet.</p>';
-const hlCall=(route,body)=>{if(ACT.token)body.token=ACT.token();return post(route,body,headers());};
+const hlCall=actCall;
 $('#hl-go').onclick=()=>{const convs=[...document.querySelectorAll('[data-hl]:checked')].map(c=>c.dataset.hl);if(!convs.length){$('#hl-say').textContent='Tick at least one conversation below first.';return;}
   $('#hl-go').disabled=true;$('#hl-say').textContent='Writing the highlight…';
   hlCall('highlight',{slug:SLUG,convs}).then(()=>{$('#hl-say').textContent='Made. Each person in the space says yes before it travels.';if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});})
@@ -288,6 +305,10 @@ document.querySelectorAll('[data-hlok],[data-hlno]').forEach(b=>b.onclick=()=>{c
 document.querySelectorAll('[data-hlpub]').forEach(b=>b.onclick=()=>{b.disabled=true;hlCall('publish',{slug:SLUG,doc:b.dataset.hlpub,to:'public'})
   .then(r=>{say('Public page made.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
 document.querySelectorAll('[data-hlcopy]').forEach(b=>b.onclick=()=>{try{navigator.clipboard.writeText(b.dataset.hlcopy);b.textContent='Copied';}catch(e){}});
+// Preview: the public page drawn from what is here now, before anyone has said yes. Nothing is published.
+document.querySelectorAll('[data-hlprev]').forEach(b=>b.onclick=()=>{const h=hls.find(x=>x.id===b.dataset.hlprev);if(!h)return;
+  const pv={title:h.title,when:h.when,points:h.points,quotes:h.quotes,people:D.people.map(p=>p.name),convTitles:(h.convs||[]).map(id=>({title:conv(id).title,date:conv(id).date}))};
+  try{localStorage.setItem('hl-preview',JSON.stringify(pv));}catch(e){}window.open('/h/?preview=1','_blank');});
 document.querySelectorAll('[data-hlback]').forEach(b=>b.onclick=()=>{b.disabled=true;hlCall('publish',{slug:SLUG,doc:b.dataset.hlback,to:'private'})
   .then(()=>{say('The public page is gone. The highlight stays here.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
 const sels=document.querySelectorAll('[data-hlto]');
@@ -334,8 +355,10 @@ function show(D,again){$('#gate').classList.add('hidden');$('#body').classList.r
    the app key for the host. Nothing goes up without one; the preview has neither. */
 let ACT=null,REC=null;
 const say=t=>{$('#put-say').textContent=t;};
-const headers=()=>ACT.key?{'x-ob-key':ACT.key}:{};
-const tokenQ=()=>ACT.token?'&token='+encodeURIComponent(ACT.token()):'';
+const headers=()=>ACT&&ACT.key?{'x-ob-key':ACT.key}:{};
+const tokenQ=()=>ACT&&ACT.token?'&token='+encodeURIComponent(ACT.token()):'';
+// Any call that acts as this person: a member's token rides in the body, the host's key in a header.
+const actCall=(route,body)=>{if(ACT&&ACT.token)body.token=ACT.token();return post(route,body,headers());};
 function recordInto(){
   if(REC){REC.stop();return;}
   if(!(navigator.mediaDevices&&window.MediaRecorder)){say('This browser cannot record. Type instead.');return;}
@@ -420,7 +443,11 @@ function weave(){
         `<label style="display:block;margin-top:14px">Name<input id="si-n" style="${FIELD}" autocomplete="username" autocapitalize="none" value="${esc(NAME)}"></label>
          <label style="display:block">Account code<input id="si-c" style="${FIELD}" autocomplete="current-password" autocapitalize="none" spellcheck="false"></label>
          <button id="si-go">Sign in</button><p id="si-e" class="tag" style="margin:12px 0 0"></p>
-         <p class="tag" style="margin:12px 0 0">Lost your code? Ask Jay for a new one.</p>`);
+         <p class="tag" style="margin:12px 0 0">Lost your code? Ask Jay for a new one.</p>
+         <p class="tag" style="margin:18px 0 0">The host of this space? <button class="link" id="si-host">Use the app key instead</button></p>
+         <div id="si-hostbox" class="hidden"><label style="display:block;margin-top:10px">App key<input id="si-k" style="${FIELD}" type="password" autocomplete="off"></label><button id="si-kgo">Open as host</button></div>`);
+      m.querySelector('#si-host').onclick=()=>m.querySelector('#si-hostbox').classList.toggle('hidden');
+      m.querySelector('#si-kgo').onclick=()=>{const k=m.querySelector('#si-k').value.trim();if(!k)return;try{localStorage.setItem('ob-key',JSON.stringify(k));}catch(e){}location.href=location.pathname+'?s='+encodeURIComponent(SLUG);};
       const go=()=>{const n=$('#si-n').value.trim().toLowerCase(),c=$('#si-c').value.trim();
         if(!n||!c){$('#si-e').textContent='Fill in both.';return;}
         $('#si-go').disabled=true;$('#si-e').textContent='Signing in…';

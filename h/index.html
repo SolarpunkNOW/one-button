@@ -39,10 +39,13 @@ const $=s=>document.querySelector(s);
 const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
 const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
-const id=new URLSearchParams(location.search).get('id')||'';
-fetch(API+'/api/hl/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
-  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))))
+const Q=new URLSearchParams(location.search),id=Q.get('id')||'',PREVIEW=Q.get('preview')==='1';
+// A preview is drawn from what the space page handed over; nothing is fetched and nothing is public.
+(PREVIEW?new Promise((ok,no)=>{try{const p=JSON.parse(localStorage.getItem('hl-preview')||'null');p?ok(p):no(new Error('nothing to preview'));}catch(e){no(e);}})
+  :fetch(API+'/api/hl/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status)))))
   .then(h=>{
+    if(PREVIEW)document.querySelector('.bar .tag').textContent='Preview, not public';
     document.title=h.title||'Highlight';
     const conv=(h.convTitles||[]);
     const where=p=>{const c=conv[0]||{};return (c.title?'From "'+esc(c.title)+'"'+(c.date?', '+esc(c.date):''):'From a conversation')+(p&&p.at?' at '+mmss(p.at):'');};

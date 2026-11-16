@@ -1,0 +1,11 @@
+{
+  "name": "one-button-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "One Button as a tool any assistant can use: read tasks, conversations, spaces and projects. Reads only for now.",
+  "bin": { "one-button-mcp": "server.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

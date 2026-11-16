@@ -660,8 +660,11 @@ async function ivPending() {
 async function ivCollected(body) {
   const id = String(body.id || "");
   if (!ID_RE.test(id)) return [400, { error: "bad id" }];
-  await audioFile(id).delete({ ignoreNotFound: true });
-  const upd = { collected: true, refile: false, folder: String(body.folder || "").slice(0, 300) };
+  // The server lets go of the audio once the laptop has it, unless the conversation is in a
+  // shared space: then the people in that space can still listen.
+  const inSpace = (await listRef().collection("spaces").get()).docs.some((s) => { const x = s.data(); return [...(((x.data || {}).convs) || []), ...(((x.added || {}).convs) || [])].some((c) => c && c.iv === id); });
+  if (!inSpace) await audioFile(id).delete({ ignoreNotFound: true });
+  const upd = { collected: true, refile: false, folder: String(body.folder || "").slice(0, 300), audioKept: inSpace };
   // A correction to who was in the conversation (the note step can mishear or mix up names).
   if (Array.isArray(body.people)) { upd.people = body.people.map((p) => String(p).slice(0, 60)).slice(0, 20); upd.peopleBy = "jay"; }
   await listRef().collection("interviews").doc(id).update(upd);
@@ -743,6 +746,31 @@ const SLUG_RE = /^[a-z0-9-]{3,40}$/;
 // opens there instead. The choice is kept per space so later links go to the same place.
 const OB_SITE = "https://one-button-jay.web.app", CANOPY_SITE = "https://canopy-website-ef7a8.web.app";
 const spaceRef = (slug) => listRef().collection("spaces").doc(slug);
+/* The heavy half of a conversation (its transcript and timings) lives in its own document under
+ * the space, so a space never meets the one-megabyte ceiling and a page can fetch one
+ * conversation's words on demand. The space document keeps the light index. */
+const convRef = (slug, id) => spaceRef(slug).collection("convs").doc(String(id));
+async function splitConvs(slug, convs) {
+  let moved = 0;
+  for (const c of convs || []) {
+    if (!c || (c.transcript === undefined && c.segments === undefined)) continue;
+    const transcript = String(c.transcript || ""), segments = Array.isArray(c.segments) ? c.segments : [];
+    if (transcript || segments.length) { await convRef(slug, c.id).set({ id: c.id, transcript, segments, iv: c.iv || "" }, { merge: true }); moved++; }
+    delete c.transcript; delete c.segments; c.heavy = true;
+  }
+  return moved;
+}
+// Older spaces still carry transcripts inline: move them out the first time they are read.
+async function migrateSpace(slug, s) {
+  if (!s.exists) return s;
+  const d = s.data().data || {}, a = s.data().added || {};
+  const heavy = [...(d.convs || []), ...(a.convs || [])].some((c) => c && (c.transcript !== undefined || c.segments !== undefined));
+  if (!heavy) return s;
+  await splitConvs(slug, d.convs); await splitConvs(slug, a.convs);
+  await spaceRef(slug).set({ data: d, added: a }, { merge: true });
+  return spaceRef(slug).get();
+}
+async function convHeavy(slug, id) { const h = await convRef(slug, id).get(); return h.exists ? h.data() : { transcript: "", segments: [] }; }
 
 async function weaveAdmin(action, body) {
   const r = await fetch(WEAVE + "/admin", {
@@ -758,6 +786,7 @@ const weaveGet = (route) => fetch(WEAVE + route).then((r) => r.json());
 async function spSave(body) {
   const slug = String(body.slug || ""), data = body.data;
   if (!SLUG_RE.test(slug) || !data || typeof data !== "object") return [400, { error: "bad space" }];
+  await splitConvs(slug, data.convs);
   if (JSON.stringify(data).length > 900000) return [413, { error: "space too big" }];
   await spaceRef(slug).set({ slug, person: String(body.person || ""), name: String(body.name || ""), data, updated: Date.now() }, { merge: true });
   return [200, { ok: true }];
@@ -783,7 +812,7 @@ async function spGet(body) {
   const slug = String(body.slug || "");
   const s = await spaceRef(slug).get();
   // The host's own view carries what members added, and notes that the host has now seen it.
-  if (s.exists) { spaceRef(slug).set({ hostSeen: Date.now() }, { merge: true }).catch(() => {}); return [200, withAdded(s)]; }
+  if (s.exists) { spaceRef(slug).set({ hostSeen: Date.now() }, { merge: true }).catch(() => {}); return [200, withAdded(await migrateSpace(slug, s))]; }
   // Not mine: a space someone else opened for me shows the member's view, held parts removed.
   const shared = await spaceForMe(slug);
   return shared ? spServe(slug, shared) : [404, { error: "no such space" }];
@@ -840,6 +869,9 @@ async function spForPerson(body) {
   const title = iv.title || iv.name;
   if (!data.convs.some((c) => c.iv === iv.id || c.title === title)) {
     const add = convFromInterview(iv, data.convs.length + 1);
+    // The recording stays listenable for the space if the server still holds it.
+    add.conv.audio = await audioFile(iv.id).exists().then(([ok]) => ok).catch(() => false);
+    await splitConvs(slug, [add.conv]);
     data.convs.push(add.conv);
     data.tasks.push(...add.tasks);
     add.projects.forEach((p) => { p.id = "p" + (data.projects.length + 1); data.projects.push(p); });
@@ -995,8 +1027,9 @@ async function spRecord(req, visitor) {
   const whoOf = (w) => { const s = String(w || "").toLowerCase(); return s === "both" ? "both" : s === "jay" ? "jay" : by.id; };
   const date = new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const segments = tr.json.segments || [];
-  const conv = { id, title: String(note.title || "Conversation").slice(0, 120), date, mins: 0, held: "", by: by.id, at,
+  const conv = { id, title: String(note.title || "Conversation").slice(0, 120), date, mins: 0, held: "", by: by.id, at, audio: true,
     summary: String(note.summary || "").slice(0, 4000), note: "", points: arr(note.points).map(String), quotes: arr(note.quotes).map(String), transcript, segments };
+  await splitConvs(slug, [conv]);
   const tasks = arr(note.actions).map((a) => { const text = String((a && a.text) || a).slice(0, 300); return { who: whoOf(a && a.who), text, done: false, from: id, due: String((a && a.due) || ""), held: "", by: by.id, at, prov: { conv: id, ...anchor(segments, text) } }; });
   const projects = arr(note.projects).filter((p) => p && p.name).map((p, i) => ({ id: id + "p" + i, name: String(p.name).slice(0, 120), status: "Idea", about: String(p.idea || "").slice(0, 600), next: "", convs: [id], held: "", by: by.id, at, prov: { conv: id, ...anchor(segments, p.name + " " + p.idea) } }));
   await pushAdded(slug, { convs: [conv], tasks, projects });
@@ -1038,6 +1071,7 @@ async function spHighlight(req, body, visitor) {
   const convs = d.convs.filter((c) => ids.includes(c.id) && !c.held);
   if (!convs.length) return [400, { error: "pick a conversation first" }];
   const names = (d.people || []).map((p) => p.name).join(" and ");
+  for (const c of convs) { const h = await convHeavy(slug, c.id); c.transcript = h.transcript || c.transcript || ""; c.segments = h.segments || c.segments || []; }
   const text = convs.map((c) => `## ${c.title} (${c.date})\n${c.transcript || c.summary || ""}`).join("\n\n").slice(0, 60000);
   const out = await chat({ messages: [{ role: "system", content: HL_SYS(names) }, { role: "user", content: text }] }, 2500);
   let hl = null;
@@ -1103,6 +1137,44 @@ async function spPublish(req, body, visitor) {
   await pushAdded(to, { docs: [{ ...doc, id: id + "-" + to, consent: {}, visibility: "shared", lineage: { space: slug, doc: id, people }, by: me.name, at: Date.now() }] });
   return [200, { ok: true }];
 }
+/* On demand for a signed-in member: one conversation's words, its recording, or the whole space
+ * as a bundle to keep. Held conversations stay with the host. */
+async function spConvFor(req, body, visitor) {
+  const slug = String(body.slug || req.query.slug || ""), id = String(body.conv || req.query.conv || "");
+  if (!SLUG_RE.test(slug) || !/^[\w-]{1,40}$/.test(id)) throw Object.assign(new Error("bad request"), { code: 400 });
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
+  const c = (withAdded(s).convs || []).find((x) => x.id === id);
+  if (!c || (c.held && by.id !== "jay")) throw Object.assign(new Error("no such conversation"), { code: 404 });
+  return { slug, c, by, s };
+}
+async function spTranscript(req, body, visitor) {
+  const { slug, c } = await spConvFor(req, body, visitor);
+  const h = await convHeavy(slug, c.id);
+  return [200, { id: c.id, transcript: h.transcript || "", segments: h.segments || [] }];
+}
+async function spAudio(req, res, visitor) {
+  const { slug, c } = await spConvFor(req, {}, visitor);
+  const f = c.by && c.by !== "jay" ? spaceAudio(slug, c.id) : audioFile(c.iv || c.id);
+  const [ok] = await f.exists().catch(() => [false]);
+  if (!ok) { res.status(404).json({ error: "the recording is no longer on the server" }); return; }
+  const [meta] = await f.getMetadata().catch(() => [{}]);
+  const [buf] = await f.download();
+  res.set("Cache-Control", "private, max-age=3600").type((meta && meta.contentType) || "audio/mp4").send(buf);
+}
+async function spExport(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), keep = (x) => by.id === "jay" || !x.held;
+  const convs = [];
+  for (const c of (d.convs || []).filter(keep)) { const h = await convHeavy(slug, c.id); convs.push({ ...c, transcript: h.transcript || "", segments: h.segments || [] }); }
+  return [200, { space: slug, people: d.people || [], since: d.since || "", exportedAt: new Date().toISOString(), exportedBy: by.id,
+    convs, tasks: (d.tasks || []).filter(keep), projects: (d.projects || []).filter(keep), docs: (d.docs || []).filter(keep), links: d.links || [] }];
+}
 async function hlGet(body) {
   const id = String(body.id || "");
   if (!/^h[a-z0-9]{1,20}$/.test(id)) return [400, { error: "bad id" }];
@@ -1113,6 +1185,7 @@ async function hlGet(body) {
 async function spServe(slug, s) {
   if (!s.exists) return [404, { error: "no such space" }];
   if (!s.data().joined) await spaceRef(slug).update({ joined: true });
+  s = await migrateSpace(slug, s);
   const d = withAdded(s), keep = (x) => !x.held;
   // Whatever came from a held conversation goes with it; projects just lose the link to it.
   const hidden = new Set((d.convs || []).filter((c) => c.held).map((c) => c.id));
@@ -1251,11 +1324,13 @@ exports.oneButton = onRequest(
       try { send(await spData(body, visitor)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish"].includes(sp[1])) {
-      // A member puts something in: their Weave sign-in (or the host's key) is the lock.
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export"].includes(sp[1])) {
+      // A member puts something in, or takes something out: their Weave sign-in (or the host's
+      // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
-      if (!(await checkRateLimit(sp[1] === "record" || sp[1] === "highlight" ? 60 : 200, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
-      const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor) }[sp[1]];
+      if (!(await checkRateLimit(sp[1] === "record" || sp[1] === "highlight" ? 60 : 400, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
+      if (sp[1] === "audio") { try { await spAudio(req, res, visitor); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); } return; }
+      const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor), transcript: () => spTranscript(req, body, visitor), export: () => spExport(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
