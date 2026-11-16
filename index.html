@@ -1154,6 +1154,8 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden){nativeDon
  * recorded conversations, and things he asked Claude to look into. Ticked ones sit on the main
  * screen beside the button. A task belongs to a project when it is linked on the task, or when it
  * came from one of that project's conversations. */
+// Shared spaces, declared before anything that draws them (the board runs early at start-up).
+let SPACES=LS.get('ob-spaces',[]), WITH_ME=LS.get('ob-withme',[]);
 let PROJ=LS.get('ob-proj',{projects:[],proposed:[],statuses:['Idea','Exploring','Active','Paused','Done','Dropped']});
 async function projRefresh(){if(!obKey())return;
   try{const r=await fetch(API+'/api/project/list',{method:'POST',headers:obHeaders(),body:'{}'});if(!r.ok)return;
@@ -2213,14 +2215,12 @@ function ivShareText(t){
 /* Shared spaces: one per person, built by the laptop from the vault's "Jay x <Name>" folder,
    so what they see always matches the vault. Jay opens his own view here (held parts shown);
    the person gets a one-time Weave link to join, and after joining, a link that keeps working. */
-let SPACES=LS.get('ob-spaces',[]);
 async function spRefresh(){
   if(!obKey())return;
   try{const r=await fetch(API+'/api/space/list',{method:'POST',headers:obHeaders(),body:'{}'});
     if(!r.ok)return; const d=await r.json(); SPACES=d.spaces||[]; WITH_ME=d.withMe||[]; LS.set('ob-spaces',SPACES); LS.set('ob-withme',WITH_ME); renderSpaces(); try{renderProjBoard();}catch{} if(ivOpen)renderIv();
   }catch{}
 }
-let WITH_ME=LS.get('ob-withme',[]);
 function renderSpaces(){
   // Also on the main list, above the tasks, so each space is one tap away. Spaces someone else
   // opened with this person come first: the conversations, projects and tasks both generated.
