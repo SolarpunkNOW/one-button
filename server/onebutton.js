@@ -1860,18 +1860,23 @@ async function ssCreate(req, body) {
   const slug = String(body.slug || "").toLowerCase();
   if (!SLUG_RE.test(slug) || slug.length > 34) return [400, { error: "bad name" }];
   const parent = SLUG_RE.test(String(body.parent || "")) ? String(body.parent) : "";
-  let parentPeople = [];
-  if (parent) { const ps = await spaceRef(parent).get(); if (!ps.exists) return [404, { error: "no such conversation space" }]; parentPeople = ((ps.data().data || {}).people || []).map((p) => p.id); }
+  let parentPeople = [], parentRoll = {};
+  if (parent) { const ps = await spaceRef(parent).get(); if (!ps.exists) return [404, { error: "no such conversation space" }];
+    const pp = ((ps.data().data || {}).people || []); parentPeople = pp.map((p) => p.id);
+    // A seed space that grows from a conversation space has that space's people as members from the start.
+    for (const p of pp) parentRoll[p.id] = { since: Date.now(), show: false, label: p.name, via: parent }; }
   const exists = await ssCol().doc(slug).get();
   if (exists.exists) {
     if (!parent) return [409, { error: "already exists" }];
     // An existing seed space becomes the public face of a topic inside a conversation space.
-    await exists.ref.update({ parent, parentPeople });
-    return [200, { ok: true, slug, attached: true }];
+    const members = { ...(exists.data().members || {}) };
+    for (const [id, m] of Object.entries(parentRoll)) if (!members[id]) members[id] = m;
+    await exists.ref.update({ parent, parentPeople, members });
+    return [200, { ok: true, slug, attached: true, members: Object.keys(members).length }];
   }
   const words = (Array.isArray(body.words) ? body.words : []).map((w) => String(w).toLowerCase().trim()).filter(Boolean).slice(0, 20);
   await ssCol().doc(slug).set({ slug, name: String(body.name || slug).slice(0, 80), about: String(body.about || "").slice(0, 600), words, licence: LICENCE, created: Date.now(), by: me.name,
-    members: { [me.name]: { since: Date.now(), show: false, label: me.name === "jay" ? "Jay" : me.name } }, requests: [], notes: [], links: [], ...(parent ? { parent, parentPeople } : {}) });
+    members: { ...parentRoll, [me.name]: { since: Date.now(), show: false, label: me.name === "jay" ? "Jay" : me.name } }, requests: [], notes: [], links: [], ...(parent ? { parent, parentPeople } : {}) });
   const com = "ss-" + slug;
   const reg = await weaveGet("/registry?id=" + encodeURIComponent(com)).catch(() => ({}));
   if (!reg.recognised) {
@@ -1886,6 +1891,7 @@ async function ssGet(req, body, visitor) {
   const snap = await ssLoad(slug), ss = snap.data(), a = await ssActor(req, body, slug, visitor);
   // A Weave member of the community who is not on the roll yet (just redeemed an invitation) is added now.
   if (a && (a.viaParent || !a.key || (ss.parentPeople || []).includes(a.id)) && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
+  if (a && (ss.members || {})[a.id] && !ss.members[a.id].opened && a.id !== "jay") { ss.members[a.id] = { ...ss.members[a.id], opened: Date.now() }; await snap.ref.update({ members: ss.members }); }
   const member = isMember(ss, a);
   const seeds = (await seedsCol().where("seedSpace", "==", slug).get()).docs.map((d) => d.data()).filter((x) => x.status === "public" || (member && x.status === "offered"));
   const anon = (ids) => { const named = (ids || []).map((i) => shownName(ss, i)).filter(Boolean); const rest = (ids || []).length - named.length; return named.concat(rest > 0 ? [rest === 1 ? "a member" : rest + " members"] : []); };
@@ -1903,8 +1909,9 @@ async function ssGet(req, body, visitor) {
     // People in the conversation space this grew from who have not opened it yet: they are in already,
     // they only need the link.
     waitingFromParent: member && ss.parent ? await (async () => { const ps = await spaceRef(ss.parent).get(); const people = (((ps.data() || {}).data || {}).people || []);
-      return people.filter((p) => !(ss.members || {})[p.id] && (ss.parentPeople || []).includes(p.id)).map((p) => ({ id: p.id, name: p.name })); })() : [],
+      return people.filter((p) => p.id !== "jay" && (ss.parentPeople || []).includes(p.id) && !((ss.members || {})[p.id] || {}).opened).map((p) => ({ id: p.id, name: p.name })); })() : [],
     parent: member ? ss.parent || "" : "",
+    grewFrom: ss.parent ? (member ? Object.entries(ss.members || {}).filter(([id, m]) => m.via === ss.parent || (ss.parentPeople || []).includes(id)).map(([, m]) => m.label) : (ss.parentPeople || []).length) : null,
     slug, name: ss.name, about: ss.about, licence: ss.licence || LICENCE, words: ss.words || [], me: member ? { id: a.id, show: !!(ss.members[a.id] || {}).show } : null,
     members: Object.keys(ss.members || {}).length, named: Object.entries(ss.members || {}).filter(([, m]) => m.show).map(([, m]) => m.label),
     seeds: seeds.map((x) => ({ id: x.id, kind: x.kind, title: x.title, about: x.about, quote: x.prov && x.prov.quote, at: x.prov && x.prov.at, convTitle: x.convTitle, from: anon(x.people), status: x.status, when: new Date(x.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) })),

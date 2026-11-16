@@ -382,7 +382,7 @@
 </div>
 
 <div class="sheet" id="sheet-changes">
-  <div class="sheet-bar"><h2>New changes</h2><button class="sheet-x" data-close>&times;</button></div>
+  <div class="sheet-bar"><h2>What's new</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body" id="changes-body"></div>
 </div>
 
@@ -2765,11 +2765,21 @@ const CHANGES=[
 function hasChange(id){return !!LS.get('ob-changes',{})[id]||(()=>{try{return JSON.parse(sessionStorage.getItem('ob-try')||'[]').includes(id);}catch{return false;}})();}
 function changesNew(){const seen=LS.get('ob-changes-seen',[]);return CHANGES.filter(c=>!seen.includes(c.id));}
 function openChanges(){hideLock();openSheet('#sheet-changes');renderChanges();
+  // The notes may not have arrived yet (the app just reloaded): fetch them and draw again.
+  fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{if(v&&v.notes){NOTES=v.notes;renderChanges();}}).catch(()=>{});
   LS.set('ob-changes-seen',CHANGES.map(c=>c.id));checkUpdate();}
+// What changed, one plain line per deploy (from version.json), newest first. Seen ones stay, greyed.
+let NOTES=[],RELOAD_QUIET=false;
+function notesNew(){const seen=LS.get('ob-notes-seen','');return (NOTES||[]).filter(n=>n.at>seen);}
+// A newer page with nothing worth telling: reload quietly the next time the app comes back, never mid-recording.
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&RELOAD_QUIET&&!mainLive&&!lkLive&&!intOn)location.reload();});
 function renderChanges(){const box=$('#changes-body'),on=LS.get('ob-changes',{}),fresh=changesNew().map(c=>c.id);
-  box.innerHTML=CHANGES.length?CHANGES.slice().reverse().map(c=>`<div class="note-item"><div class="ntext">${escapeHtml(c.text)}<div class="nmeta">${on[c.id]?'added':hasChange(c.id)?'trying it':fresh.includes(c.id)?'new':'off'}</div>
+  const seenAt=LS.get('ob-notes-seen','');
+  const notesHtml=(NOTES||[]).length?'<div class="iv-h" style="margin-top:0">What changed</div>'+NOTES.slice(0,20).map(n=>`<div class="note-item" style="cursor:default${n.at>seenAt?'':';opacity:.6'}"><div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${new Date(n.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}${n.at>seenAt?' . new':''}</div></div></div>`).join('')+'<div class="iv-h" style="margin-top:18px">Changes to switch on</div>':'';
+  if((NOTES||[]).length)LS.set('ob-notes-seen',NOTES[0].at);
+  box.innerHTML=notesHtml+(CHANGES.length?CHANGES.slice().reverse().map(c=>`<div class="note-item"><div class="ntext">${escapeHtml(c.text)}<div class="nmeta">${on[c.id]?'added':hasChange(c.id)?'trying it':fresh.includes(c.id)?'new':'off'}</div>
     <div class="iv-row">${on[c.id]?`<button class="tbtn" data-cx="${c.id}">Remove</button>`:`<button class="tbtn" data-ct="${c.id}">Try it</button><button class="tbtn" data-ca="${c.id}">Add</button>`}</div></div></div>`).join('')
-    :'<div class="empty">Nothing new to choose yet. Fixes turn on by themselves.</div>';
+    :'<div class="empty">Nothing to switch on yet. Fixes turn on by themselves.</div>');
   // Each switch takes effect on a fresh page, so the page reloads and comes back to this list.
   const redo=()=>{location.hash='changes';location.reload();};
   box.querySelectorAll('[data-ct]').forEach(b=>b.onclick=()=>{let t=[];try{t=JSON.parse(sessionStorage.getItem('ob-try')||'[]');}catch{}
@@ -2791,6 +2801,7 @@ function checkUpdate(){
   Promise.all([fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null),appInfo]).then(([v,ai])=>{
     if(!v)return;
     if(ai&&ai.build>(v.android||0))v.android=ai.build;
+    NOTES=v.notes||NOTES;
     if(VER_SEEN===null)VER_SEEN=v.web||'';
     const mine=NATIVE&&NATIVE.build?NATIVE.build():0;
     let text='',go=null;
@@ -2799,7 +2810,9 @@ function checkUpdate(){
     if(mine&&v.android>mine){text='Build '+v.android+' is ready, you have '+mine+'. Tap to install.';
       go=()=>{if(NATIVE.installUpdate){NATIVE.installUpdate();}else location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
     // A newer page only brings fixes and switched-off changes, so loading it is safe; it opens on the list.
-    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='One Button has new changes. Tap to look at them.';go=()=>{location.hash='changes';location.reload();};}
+    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){NOTES=v.notes||[];const fresh=notesNew();
+      if(fresh.length){text="What's new: "+fresh[0].text+(fresh.length>1?' (and '+(fresh.length-1)+' more)':'');go=()=>{location.hash='changes';location.reload();};}
+      else RELOAD_QUIET=true;}
     else if(changesNew().length){const n=changesNew().length;text=n+' new change'+(n>1?'s':'')+' to look at.';go=openChanges;}
     UPD={text,go};renderBar();
   }).catch(()=>{});
