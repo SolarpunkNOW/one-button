@@ -1347,6 +1347,7 @@ async function spSeedOk(req, body, visitor) {
   const consent = { ...(x.consent || {}), [by.id]: body.ok ? "ok" : "no" };
   const all = Object.values(consent).every((v) => v === "ok");
   const upd = { consent, status: all ? (x.status === "public" || x.status === "offered" ? x.status : "agreed") : "private" };
+  if (all && x.intendedFor && !x.seedSpace) { upd.seedSpace = x.intendedFor; upd.status = "public"; upd.offeredBy = x.intendedBy || by.id; upd.offeredAt = Date.now(); }
   if (!all && x.seedSpace) upd.seedSpace = "";
   await ref.update(upd);
   return [200, { ok: true, ...upd }];
@@ -1422,7 +1423,17 @@ async function ssGet(req, body, visitor) {
   const member = isMember(ss, a);
   const seeds = (await seedsCol().where("seedSpace", "==", slug).get()).docs.map((d) => d.data()).filter((x) => x.status === "public" || (member && x.status === "offered"));
   const anon = (ids) => { const named = (ids || []).map((i) => shownName(ss, i)).filter(Boolean); const rest = (ids || []).length - named.length; return named.concat(rest > 0 ? [rest === 1 ? "a member" : rest + " members"] : []); };
+  // A member also sees seeds from their own conversations that fit this space but are not here yet:
+  // waiting for a yes, or agreed and ready. Only the people in that conversation ever see these.
+  let mine = [];
+  if (member) {
+    const q = await seedsCol().where("people", "array-contains", a.id).get();
+    mine = q.docs.map((d) => d.data()).filter((x) => x.seedSpace !== slug && x.status !== "public" && (x.intendedFor === slug || hasWords(ss.words || [], x.title, x.about, x.convTitle)))
+      .map((x) => ({ id: x.id, origin: x.origin, kind: x.kind, title: x.title, about: x.about, quote: x.prov && x.prov.quote, at: x.prov && x.prov.at, convTitle: x.convTitle, consent: x.consent, status: x.status, intended: x.intendedFor === slug,
+        waiting: Object.entries(x.consent || {}).filter(([, v]) => v !== "ok").map(([k]) => k), when: new Date(x.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) }));
+  }
   return [200, {
+    mine,
     slug, name: ss.name, about: ss.about, licence: ss.licence || LICENCE, words: ss.words || [], me: member ? { id: a.id, show: !!(ss.members[a.id] || {}).show } : null,
     members: Object.keys(ss.members || {}).length, named: Object.entries(ss.members || {}).filter(([, m]) => m.show).map(([, m]) => m.label),
     seeds: seeds.map((x) => ({ id: x.id, kind: x.kind, title: x.title, about: x.about, quote: x.prov && x.prov.quote, at: x.prov && x.prov.at, convTitle: x.convTitle, from: anon(x.people), status: x.status, when: new Date(x.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) })),
@@ -1460,6 +1471,15 @@ async function ssAct(req, body, visitor, action) {
     if (!s.exists || s.data().seedSpace !== slug) return [404, { error: "no such seed" }];
     await ref.update({ status: "public", acceptedBy: a.id, acceptedAt: now });
     return [200, { ok: true }];
+  }
+  if (action === "bring") {
+    // A member brings one of their own seeds: now if everyone in its conversation has said yes,
+    // otherwise it is marked to arrive by itself on the last yes.
+    const ref = seedsCol().doc(String(body.seed || "")), s = await ref.get();
+    if (!s.exists || !(s.data().people || []).includes(a.id)) return [404, { error: "no such seed of yours" }];
+    const all = Object.values(s.data().consent || {}).every((v) => v === "ok");
+    await ref.update(all ? { seedSpace: slug, status: "public", offeredBy: a.id, offeredAt: now } : { intendedFor: slug, intendedBy: a.id });
+    return [200, { ok: true, now: all }];
   }
   if (action === "note") {
     const text = String(body.text || "").trim().slice(0, 1500); if (!text) return [400, { error: "nothing to add" }];
@@ -1804,7 +1824,7 @@ exports.oneButton = onRequest(
       try { send(await spData(body, visitor)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    const sso = req.path.match(/\/ss\/(list|get|create|request|admit|invite|accept|note|link|optin)$/);
+    const sso = req.path.match(/\/ss\/(list|get|create|request|admit|invite|accept|note|link|optin|bring)$/);
     if (sso) {
       // Seed spaces: open to read, a member's sign-in (or a One Button key) to act.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";

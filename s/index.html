@@ -54,6 +54,7 @@ const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const API=(/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app')+'/api/ss/';
 const CANOPY='https://canopy-website-ef7a8.web.app',WEAVE=CANOPY+'/api/weave-trust';
 const Q=new URLSearchParams(location.search),SLUG=Q.get('s')||'',INVITE=Q.get('invite');
+let PREVIEW=false; // a member's look at the public page, with seeds still waiting for a yes shown as they would appear
 const COM='ss-'+SLUG;
 function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}
   try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
@@ -68,18 +69,24 @@ const shareOut=(url,title)=>{const u=encodeURIComponent(url),t=encodeURIComponen
 document.addEventListener('click',e=>{const b=e.target.closest('[data-native]');if(!b)return;navigator.share({title:b.dataset.title,text:b.dataset.title,url:b.dataset.native}).catch(()=>{});});
 
 function render(d){
-  const M=!!d.me,url=location.origin+location.pathname+'?s='+encodeURIComponent(SLUG);
+  let M=!!d.me,url=location.origin+location.pathname+'?s='+encodeURIComponent(SLUG);
   $('#mode').textContent=M?'Seed space, member':'Seed space';
   const notesFor=id=>d.notes.filter(n=>n.seed===id);
-  const seed=s=>`<div class="box" id="seed-${esc(s.id)}"><span class="tag">${esc(s.kind)} . ${esc(s.when)} . from ${esc((s.from||[]).join(' and '))}${s.status==='offered'?' . offered, waiting for a member to take it in':''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>
+  const seed=s=>`<div class="box" id="seed-${esc(s.id)}"${s.status==='preview'?' style="border-style:dashed"':''}><span class="tag">${esc(s.kind)} . ${esc(s.when)} . from ${s.status==='preview'?'a member':esc((s.from||[]).join(' and '))}${s.status==='offered'?' . offered, waiting for a member to take it in':''}${s.status==='preview'?' . preview: shows here once everyone in its conversation says yes':''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>
     ${s.quote?`<div class="q">${s.at?'At '+mmss(s.at)+': ':''}"${esc(s.quote)}"</div>`:''}
     ${notesFor(s.id).map(n=>`<div class="note">${esc(n.text)} <span class="tag">${esc(n.by)}</span></div>`).join('')}
     ${M?`<div class="row">${s.status==='offered'?`<button data-accept="${esc(s.id)}">Take it in</button>`:''}<button class="link" data-addnote="${esc(s.id)}">Add to this seed</button></div><div id="nf-${esc(s.id)}"></div>`:''}</div>`;
-  const pub=d.seeds.filter(s=>s.status==='public'),off=d.seeds.filter(s=>s.status==='offered');
+  const waitingAsPublic=(d.mine||[]).map(s=>({...s,from:['you'],status:'preview'}));
+  const pub=d.seeds.filter(s=>s.status==='public').concat(PREVIEW?waitingAsPublic:[]),off=d.seeds.filter(s=>s.status==='offered');
+  const M0=M;if(PREVIEW)M=false;
   $('#body').innerHTML=`<h1>${esc(d.name)}</h1><p class="lede">${esc(d.about||'')}</p>
     <p class="tag">${d.members} member${d.members===1?'':'s'}${d.named.length?' . including '+esc(d.named.join(', ')):''} . ${pub.length} seed${pub.length===1?'':'s'} . ${d.links.length} linked conversation${d.links.length===1?'':'s'}</p>
     ${M?`<div class="me">You are a member. ${d.me.show?'Your name shows on what you add.':'You are anonymous here: what you add shows as "a member".'} <button class="link" id="optin">${d.me.show?'Go anonymous':'Show my name'}</button></div>`:''}
     <p id="say" class="me" hidden></p>
+    ${M0?`<div class="row"><button id="pv" class="${PREVIEW?'on':''}">${PREVIEW?'Back to my view':'Preview the public page'}</button><span class="tag">${PREVIEW?'This is what anyone with the link will see, with your waiting seeds shown dashed as if agreed.':'See it as the public will, including seeds still waiting for a yes.'}</span></div>`:''}
+    ${M&&(d.mine||[]).length?`<h2>From your conversations</h2><p class="lede">Seeds from conversations you were in that fit this space. Only the people in each conversation see these here. Each comes in when everyone in its conversation has said yes.</p>
+      ${d.mine.map(s=>`<div class="box"><span class="tag">${esc(s.kind)} . from "${esc(s.convTitle||'')}" . ${s.waiting.length?'waiting for '+esc(s.waiting.join(', '))+' to say yes':'everyone said yes'}${s.intended?' . set to come here':''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>${s.quote?`<div class="q">${s.at?'At '+mmss(s.at)+': ':''}"${esc(s.quote)}"</div>`:''}
+        <div class="row">${s.waiting.length?(s.intended?'<span class="tag">It arrives here by itself on the last yes.</span>':`<button data-bring="${esc(s.id)}">Bring it here when everyone says yes</button>`):`<button data-bring="${esc(s.id)}">Put it in now</button>`}<a class="link" href="/space.html?s=${esc(s.origin)}" target="_blank" rel="noopener">Open its conversation space</a></div></div>`).join('')}`:''}
     <h2>How it connects</h2><p class="lede">Seeds, the conversations they came from, and the conversations people have linked in.</p><svg id="map" role="img" aria-label="Map of seeds and conversations"></svg>
     <h2>Seeds</h2>${pub.length?pub.map(seed).join(''):'<p class="lede">No seeds yet.</p>'}
     ${M&&off.length?`<h2>Offered, waiting for a member</h2>${off.map(seed).join('')}`:''}
@@ -108,6 +115,8 @@ function map(d,pub){const svg=$('#map'),W=720,NS='http://www.w3.org/2000/svg',co
 function wire(d){
   const re=()=>load();
   const on=(id,f)=>{const e=$(id);if(e)e.onclick=f;};
+  on('#pv',()=>{PREVIEW=!PREVIEW;render(d);window.scrollTo(0,0);});
+  document.querySelectorAll('[data-bring]').forEach(b=>b.onclick=()=>{b.disabled=true;post('bring',{slug:SLUG,seed:b.dataset.bring}).then(r=>{say(r.now?'In the seed space now.':'Set: it comes here by itself on the last yes.');re();}).catch(e=>{b.disabled=false;say(e.message);});});
   on('#optin',()=>post('optin',{slug:SLUG,show:!d.me.show}).then(re).catch(e=>say(e.message)));
   on('#lk-go',()=>post('link',{slug:SLUG,title:$('#lk-t').value,summary:$('#lk-s').value}).then(()=>{say('Linked.');re();}).catch(e=>say(e.message)));
   on('#nt-go',()=>post('note',{slug:SLUG,text:$('#nt').value}).then(re).catch(e=>say(e.message)));
