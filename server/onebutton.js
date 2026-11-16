@@ -1239,6 +1239,23 @@ async function appLatest(res) {
   res.set("Cache-Control", "no-store").set("x-ob-build", String(m.build || 0)).type("application/vnd.android.package-archive").send(buf);
 }
 
+/* ---------- Checking that new things work ----------
+ * Each line in What's new can be marked "works" or "not quite" by whoever uses the app. "Not quite",
+ * with what happened, becomes a change request for One Button itself (kind app), so the laptop builds a
+ * fix as a preview and Jay approves it. Verdicts are kept per person. */
+const checksCol = () => listRef().collection("checks");
+async function checkAdd(body) {
+  const note = String(body.note || "").slice(0, 40), text = String(body.text || "").trim().slice(0, 1000), verdict = body.verdict === "works" ? "works" : "not quite";
+  const about = String(body.about || "").slice(0, 200);
+  if (!/^[\dTZ:\-.]{10,30}$/.test(note)) return [400, { error: "bad note" }];
+  const me = who().name, at = Date.now();
+  let ask = null;
+  if (verdict === "not quite") ask = await newAsk(`Check and fix in One Button: "${about}". ${me === "jay" ? "Jay" : me} says it is not working${text ? ": " + text : "."}`, "", 0, { app: true });
+  await checksCol().doc(note + "_" + me).set({ note, about, verdict, text, by: me, at, ask: ask ? ask.id : "" });
+  return [200, { ok: true, verdict, ask: ask ? ask.id : "" }];
+}
+async function checkList() { return [200, { checks: (await checksCol().get()).docs.map((d) => d.data()) }]; }
+
 /* ---------- Search and listening ---------- */
 // Words in, moments out: each hit is a conversation, the second it happens and the line around it.
 function findIn(transcript, segments, q) {
@@ -2378,6 +2395,11 @@ exports.oneButton = onRequest(
 
 // Everything a key holder can do, run as that person so listRef() points at their list.
 async function routed(req, res, body, sp, send, me) {
+    const ck = req.path.match(/\/check\/(add|list)$/);
+    if (ck) {
+      try { send(ck[1] === "add" ? await checkAdd(body) : await checkList()); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
     const ap = req.path.match(/\/app\/(upload|info|latest)$/);
     if (ap) {
       try { if (ap[1] === "latest") { await appLatest(res); return; } send(ap[1] === "upload" ? await appUpload(req, me) : await appInfo()); }

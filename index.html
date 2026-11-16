@@ -430,7 +430,7 @@
     <button class="save" id="set-save">Save</button>
     <p class="note">Off: the lock screen shows only how many tasks are open. Words to listen for, separated by commas, get spelled right when you speak them. Names of your people, places and projects are listened for already.</p>
     <div style="height:26px"></div>
-    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What One Button can do</button><button class="tbtn" id="link-device">Link another device</button></div>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What's new and what it can do</button><button class="tbtn" id="link-device">Link another device</button></div>
     <p class="note hidden" id="link-note"></p>
     <button class="lk-upd hidden" id="set-upd" hidden style="margin:0 0 18px"></button>
     <label class="set-h">My places</label>
@@ -2773,11 +2773,12 @@ let NOTES=[],RELOAD_QUIET=false;
 function notesNew(){const seen=LS.get('ob-notes-seen','');return (NOTES||[]).filter(n=>n.at>seen);}
 // A newer page with nothing worth telling: reload quietly the next time the app comes back, never mid-recording.
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&RELOAD_QUIET&&!mainLive&&!lkLive&&!intOn)location.reload();});
+document.addEventListener('click',e=>{if(e.target&&e.target.id==='ch-check'){closeSheets();openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";$('#sp-frame').src='/features.html#new';}});
 function renderChanges(){const box=$('#changes-body'),on=LS.get('ob-changes',{}),fresh=changesNew().map(c=>c.id);
   const seenAt=LS.get('ob-notes-seen','');
   const notesHtml=(NOTES||[]).length?'<div class="iv-h" style="margin-top:0">What changed</div>'+NOTES.slice(0,20).map(n=>`<div class="note-item" style="cursor:default${n.at>seenAt?'':';opacity:.6'}"><div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${new Date(n.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}${n.at>seenAt?' . new':''}</div></div></div>`).join('')+'<div class="iv-h" style="margin-top:18px">Changes to switch on</div>':'';
   if((NOTES||[]).length)LS.set('ob-notes-seen',NOTES[0].at);
-  box.innerHTML=notesHtml+(CHANGES.length?CHANGES.slice().reverse().map(c=>`<div class="note-item"><div class="ntext">${escapeHtml(c.text)}<div class="nmeta">${on[c.id]?'added':hasChange(c.id)?'trying it':fresh.includes(c.id)?'new':'off'}</div>
+  box.innerHTML=((NOTES||[]).length?'<div class="iv-row" style="margin:0 0 12px"><button class="save" id="ch-check">Check these work</button></div>':'')+notesHtml+(CHANGES.length?CHANGES.slice().reverse().map(c=>`<div class="note-item"><div class="ntext">${escapeHtml(c.text)}<div class="nmeta">${on[c.id]?'added':hasChange(c.id)?'trying it':fresh.includes(c.id)?'new':'off'}</div>
     <div class="iv-row">${on[c.id]?`<button class="tbtn" data-cx="${c.id}">Remove</button>`:`<button class="tbtn" data-ct="${c.id}">Try it</button><button class="tbtn" data-ca="${c.id}">Add</button>`}</div></div></div>`).join('')
     :'<div class="empty">Nothing to switch on yet. Fixes turn on by themselves.</div>');
   // Each switch takes effect on a fresh page, so the page reloads and comes back to this list.
@@ -2822,7 +2823,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdat
 
 function boot(){
   checkUpdate();
-  $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent='What One Button can do';$('#sp-frame').src='/features.html';};
+  $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";$('#sp-frame').src='/features.html#new';};
   // Link the laptop or another phone: one link, used once, no key typed anywhere.
   $('#link-device').onclick=async()=>{const b=$('#link-device'),n=$('#link-note');b.disabled=true;n.classList.remove('hidden');n.textContent='Making the link…';
     try{const r=await fetch(API+'/api/person/link',{method:'POST',headers:obHeaders(),body:JSON.stringify({device:'browser'})});const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);

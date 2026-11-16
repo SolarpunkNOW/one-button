@@ -28,6 +28,14 @@
   .toc{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
   .toc a{font:600 13px "Inter",sans-serif;color:var(--ink);border:1px solid var(--ink);padding:7px 10px;text-decoration:none}
   .note{color:var(--muted);font-size:14px}
+  .whatsnew{background:var(--spark);color:#1A1A1A;padding:14px 16px;margin:18px 0 8px}
+  .whatsnew .note{color:#1A1A1A}
+  .nw{border-top:1px solid rgba(26,26,26,.25);padding:10px 0}
+  .nw .when{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase}
+  .nw .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center}
+  .nw button{font:600 14px "Inter",sans-serif;background:#FFFFFF;color:#1A1A1A;border:1px solid #1A1A1A;padding:8px 12px;min-height:40px;cursor:pointer;border-radius:0}
+  .nw textarea{width:100%;font:15px "Inter",sans-serif;padding:8px;border:1px solid #1A1A1A;margin-top:8px;min-height:64px}
+  .nw .done{font:600 13px "Inter",sans-serif}
 </style>
 <script src="/skins/skin.js"></script>
 </head>
@@ -36,6 +44,11 @@
   <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag">Cheat sheet</span></div>
   <h1>What One Button can do</h1>
   <p class="lede">One button, pressed and spoken to. Everything below grows from that press.</p>
+  <section id="new" class="whatsnew" aria-label="What's new">
+    <h2 style="margin-top:0;border-top:0;padding-top:0">What's new</h2>
+    <p class="note" style="margin:0 0 6px">Try each one. Tap <b>Works</b>, or <b>Not quite</b> and say what happened: that goes to your laptop as a fix to build, and you approve it on your phone.</p>
+    <div id="new-list"><p class="note">Loading.</p></div>
+  </section>
   <div class="toc">
     <a href="#button">The button</a><a href="#lock">Lock screen</a><a href="#conv">Conversations</a><a href="#spaces">Shared spaces</a>
     <a href="#projects">Projects</a><a href="#triage">Task triage</a><a href="#photos">Photos and accounts</a><a href="#claude">Claude</a><a href="#settings">Settings</a><a href="#phone">The phone app</a>
@@ -125,5 +138,27 @@
 
   <p class="note" style="margin-top:30px">Forks: the page and server are public at github.com/jayfcousins-cell/one-button. A fork runs everything on its own server except shared spaces, which go through the trust net you were invited on.</p>
 </div>
+<script>
+/* What's new, from the deploy notes, with a verdict per line from whoever is using the app. */
+(function(){
+  const $=s=>document.querySelector(s),esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
+  function key(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+  const K=key(),post=(r,b)=>fetch(API+'/api/check/'+r,{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify(b||{})}).then(x=>x.json());
+  Promise.all([fetch('/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),K?post('list').catch(()=>({checks:[]})):Promise.resolve({checks:[]})]).then(([v,c])=>{
+    const notes=(v.notes||[]).slice(0,20),mine={};(c.checks||[]).forEach(x=>{mine[x.note]=x;});
+    const draw=()=>{$('#new-list').innerHTML=notes.length?notes.map(n=>{const ck=mine[n.at];
+      return `<div class="nw" data-n="${esc(n.at)}"><div class="when">${esc(new Date(n.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</div><div>${esc(n.text)}</div>
+        <div class="acts">${ck?`<span class="done">${ck.verdict==='works'?'You said it works':'You said not quite'+(ck.ask?': a fix is on its way':'')}</span> <button data-again>Check again</button>`:(K?'<button data-ok>Works</button><button data-no>Not quite</button>':'<span class="note">Open this from the app to check it.</span>')}</div></div>`;}).join(''):'<p class="note">Nothing new yet.</p>';
+      document.querySelectorAll('.nw').forEach(el=>{const at=el.dataset.n,n=notes.find(x=>x.at===at);
+        const send=(verdict,text)=>post('add',{note:at,about:n.text,verdict,text}).then(r=>{mine[at]={verdict:r.verdict,ask:r.ask};draw();}).catch(()=>{el.querySelector('.acts').insertAdjacentHTML('beforeend','<span class="note">Could not send, try again.</span>');});
+        const ok=el.querySelector('[data-ok]');if(ok)ok.onclick=()=>send('works','');
+        const no=el.querySelector('[data-no]');if(no)no.onclick=()=>{if(el.querySelector('textarea'))return;no.insertAdjacentHTML('afterend','<textarea placeholder="What happened? What did you expect?"></textarea><button data-send>Send to be fixed</button>');
+          el.querySelector('[data-send]').onclick=()=>send('not quite',el.querySelector('textarea').value);};
+        const ag=el.querySelector('[data-again]');if(ag)ag.onclick=()=>{delete mine[at];draw();};});};
+    draw();
+  }).catch(()=>{$('#new-list').innerHTML='<p class="note">Could not load what is new.</p>';});
+})();
+</script>
 </body>
 </html>
