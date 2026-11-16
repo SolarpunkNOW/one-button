@@ -583,8 +583,9 @@ async function triageApply() {
 
 // Phone: every interview's note (no transcripts) and every Ask Claude request.
 async function ivList() {
-  const ivs = (await listRef().collection("interviews").orderBy("created", "desc").limit(60).get()).docs
-    .map((d) => { const o = d.data(); delete o.transcript; return o; });
+  // Imported transcripts (other people's calls, kept for search and seeds) stay out of the list.
+  const ivs = (await listRef().collection("interviews").orderBy("created", "desc").limit(120).get()).docs
+    .map((d) => { const o = d.data(); delete o.transcript; delete o.segments; return o; }).filter((o) => !o.imported).slice(0, 60);
   const asks = (await listRef().collection("asks").orderBy("created", "desc").limit(100).get()).docs.map((d) => d.data());
   const helper = await listRef().collection("meta").doc("helper").get();
   return { interviews: ivs, asks, helperSeen: helper.exists ? helper.data().seen : 0 };
@@ -713,6 +714,35 @@ async function ivWith(body) {
 }
 
 // The laptop heard a voice it does not know yet: the recording card asks Jay who it is, once.
+// Who spoke when, from the laptop's voice model: speakers with their turns, a guess at a name,
+// and three of their own lines (from the timed transcript) so Jay can tell who is who.
+async function ivSpeakers(body) {
+  const id = String(body.id || "");
+  if (!ID_RE.test(id)) return [400, { error: "bad id" }];
+  const ref = listRef().collection("interviews").doc(id), s = await ref.get();
+  if (!s.exists) return [404, { error: "no such recording" }];
+  const segs = s.data().segments || [];
+  const speakers = (Array.isArray(body.speakers) ? body.speakers : []).slice(0, 12).map((x, i) => {
+    const turns = (Array.isArray(x.turns) ? x.turns : []).slice(0, 400).map((t) => [Number(t[0]) || 0, Number(t[1]) || 0]);
+    const lines = [];
+    for (const [at, text] of segs) { if (lines.length >= 3) break; if (String(text).length > 25 && turns.some(([b, e]) => at >= b - 0.5 && at <= e)) lines.push(String(text).slice(0, 160)); }
+    return { k: Number(x.k) || 0, n: Number(x.n) || i + 1, guess: String(x.name || "").slice(0, 60), share: Number(x.share) || 0, seconds: Number(x.seconds) || 0, turns, lines };
+  });
+  await ref.update({ speakers, speakersAt: Date.now() });
+  return [200, { ok: true, speakers: speakers.length }];
+}
+// Jay names a speaker. The names become who the conversation was with, and the laptop learns the voice.
+async function ivSpeakerName(body) {
+  const id = String(body.id || ""), k = String(Number(body.k) || 0), name = String(body.name || "").trim().slice(0, 60);
+  if (!ID_RE.test(id)) return [400, { error: "bad id" }];
+  const ref = listRef().collection("interviews").doc(id), s = await ref.get();
+  if (!s.exists) return [404, { error: "no such recording" }];
+  const names = { ...(s.data().speakerNames || {}) };
+  if (name) names[k] = name; else delete names[k];
+  const people = [...new Set(Object.values(names).filter((n) => n && n.toLowerCase() !== "jay"))];
+  await ref.update({ speakerNames: names, people, peopleBy: "jay", unknownVoices: 0, ...(s.data().collected ? { refile: true } : {}) });
+  return [200, { ok: true, speakerNames: names, people }];
+}
 async function ivVoices(body) {
   const id = String(body.id || "");
   if (!ID_RE.test(id)) return [400, { error: "bad id" }];
@@ -1665,7 +1695,7 @@ async function projList() {
   const saved = (await listRef().collection("projects").get()).docs.map((d) => d.data());
   const known = new Set(saved.map((p) => projKey(p.name)));
   const proposed = [];
-  const ivs = (await listRef().collection("interviews").orderBy("created", "desc").limit(60).get()).docs.map((d) => d.data());
+  const ivs = (await listRef().collection("interviews").orderBy("created", "desc").limit(120).get()).docs.map((d) => d.data()).filter((o) => !o.imported).slice(0, 60);
   for (const iv of ivs) for (const p of iv.projects || []) {
     const k = projKey(p.name);
     if (!k || known.has(k)) continue;
@@ -1743,7 +1773,7 @@ async function ivDrop(body) {
   await listRef().collection("asks").doc(askId).update({ ship: "declined", stage: "declined", status: "done", dropped: Date.now(), planOk: false });
   return [200, { ok: true }];
 }
-const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, import: ivImport, remove: ivRemove, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
+const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, import: ivImport, remove: ivRemove, speakers: ivSpeakers, speakername: ivSpeakerName, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
 const SP_ROUTES = { save: spSave, list: spList, get: spGet, invite: spInvite, code: spCode, person: spForPerson };
 
 exports.oneButton = onRequest(

@@ -917,6 +917,21 @@ function handle(out,original){
   }
 
   const c=findContact(out.contact);
+  // A call to someone not saved yet: the recorder starts now, and the person is learned from this
+  // call (their number, typed or picked once) instead of importing a whole address book.
+  if(!c&&out.action==='call'&&out.contact){
+    rLabel.textContent='call';startCallRec();
+    const name=String(out.contact).trim().replace(/^./,x=>x.toUpperCase());
+    rBody.innerHTML=`Calling ${escapeHtml(name)}${NATIVE&&NATIVE.startInterview?', recording':''}. First time: what is their number?
+      <input id="cl-num" inputmode="tel" placeholder="+20 100 123 4567" style="display:block;width:100%;margin-top:8px;font-size:16px;padding:10px" aria-label="Their number">`;
+    const go=svc=>{const num=cleanNum(($('#cl-num')||{}).value);if(!num){showToast('Type or pick their number first');return;}
+      const nc={name,phone:num,tg:'',email:'',learned:Date.now()};contacts.push(nc);LS.set('ob-contacts',contacts);try{renderContacts();}catch{}
+      showToast(name+' saved, with this number');callPerson(nc,svc,true);};
+    for(const s of ['phone','whatsapp','signal'])addAct(s==='phone'?'Phone':s[0].toUpperCase()+s.slice(1),s==='phone'?'go':'alt',()=>go(s));
+    if(NATIVE&&NATIVE.pickContact)addAct('Pick from my phone','alt',()=>{const was=window.obContactPicked;window.obContactPicked=(n,p)=>{window.obContactPicked=was;const i=$('#cl-num');if(i&&p)i.value=p;};try{NATIVE.pickContact();}catch{}});
+    addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});
+    return;
+  }
   if(!c){
     rLabel.textContent=out.action||'reach';
     rBody.textContent=`I don't have "${out.contact||'that person'}" yet. Add them in settings with their channels, then try again.`;
@@ -924,15 +939,17 @@ function handle(out,original){
   }
   if(out.action==='call'){
     rLabel.textContent='call';
-    const svc=/whatsapp/i.test(out.channel||'')?'whatsapp':/signal/i.test(out.channel||'')?'signal':/telegram/i.test(out.channel||'')?'telegram':'phone';
-    if(!c.phone&&!(svc==='telegram'&&c.tg)){rBody.textContent=`No phone number saved for ${c.name}.`;return;}
-    // Inside the app: the recorder starts, then the call goes out on speaker, so both sides are heard.
-    // Said as "call Simon": it just goes. The card stays so a different service is one tap away.
-    rBody.textContent=`Calling ${c.name}${svc!=='phone'?' on '+svc:''}${NATIVE&&NATIVE.placeCall?', recording':''}`;
-    if(NATIVE&&NATIVE.placeCall)callPerson(c,svc);
-    else addAct('Call now','go',()=>callPerson(c,svc));
-    for(const alt of ['phone','whatsapp','signal','telegram']){if(alt===svc)continue;if(alt==='telegram'?!c.tg:!c.phone)continue;
-      addAct(alt==='phone'?'Phone instead':alt[0].toUpperCase()+alt.slice(1)+' instead','alt',()=>callPerson(c,alt));}
+    // "Call Simon on Signal": it goes straight out. "Call Simon": the recorder starts at once and
+    // the ways to reach Simon come up, the one he is usually called on first. Each call teaches it.
+    const said=/whatsapp/i.test(out.channel||'')?'whatsapp':/signal/i.test(out.channel||'')?'signal':/telegram/i.test(out.channel||'')?'telegram':/phone|ring|dial/i.test(out.channel||'')?'phone':'';
+    if(!c.phone&&!c.tg){rBody.textContent=`No number saved for ${c.name}.`;addAct('Edit contacts','go',()=>openSheet('#sheet-settings'));return;}
+    startCallRec();
+    if(said&&(said==='telegram'?c.tg:c.phone)){rBody.textContent=`Calling ${c.name}${said!=='phone'?' on '+said:''}${NATIVE&&NATIVE.startInterview?', recording':''}`;callPerson(c,said,true);return;}
+    const ways=['phone','whatsapp','signal','telegram'].filter(s=>s==='telegram'?c.tg:c.phone);
+    const used=c.calls||{};ways.sort((a,b)=>(used[b]||0)-(used[a]||0));
+    rBody.textContent=`Calling ${c.name}${NATIVE&&NATIVE.startInterview?', recording':''}. How?`;
+    ways.forEach((s,i)=>addAct((s==='phone'?'Phone':s[0].toUpperCase()+s.slice(1))+(i===0&&used[s]?' (usual)':''),i===0?'go':'alt',()=>callPerson(c,s,true)));
+    addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});
     return;
   }
   rLabel.textContent='message';
@@ -953,10 +970,14 @@ function addAct(label,kind,fn){const b=document.createElement('button');b.classN
 // A call from One Button: inside the app the interview recorder starts first and the call is placed
 // on speaker, so the recording has both voices and is written up like any conversation, with the
 // person's name on it. In a browser it opens the dialler or the chat, no recording.
-function callPerson(c,svc){const num=cleanNum(c.phone),tg=(c.tg||'').replace('@','');
-  learn(c,svc==='phone'?'sms':svc);
-  if(NATIVE&&NATIVE.placeCall){try{NATIVE.startInterview();}catch{}
-    const target=svc==='telegram'?tg:num;setTimeout(()=>{try{NATIVE.placeCall(target,svc,c.name);}catch{showToast('Could not place the call');}},900);return;}
+// The recorder for a call starts once, when "call" is heard, before the service is chosen.
+let CALL_REC=false;
+function startCallRec(){if(CALL_REC||!(NATIVE&&NATIVE.startInterview))return;try{NATIVE.startInterview();CALL_REC=true;}catch{}}
+function stopCallRec(){if(!CALL_REC)return;try{NATIVE.stopInterview();}catch{}CALL_REC=false;}
+function callPerson(c,svc,recording){const num=cleanNum(c.phone),tg=(c.tg||'').replace('@','');
+  learn(c,svc==='phone'?'sms':svc);c.calls=c.calls||{};c.calls[svc]=(c.calls[svc]||0)+1;LS.set('ob-contacts',contacts);
+  if(NATIVE&&NATIVE.placeCall){if(!recording)startCallRec();CALL_REC=false;
+    const target=svc==='telegram'?tg:num;setTimeout(()=>{try{NATIVE.placeCall(target,svc,c.name);}catch{showToast('Could not place the call');}},recording?200:900);return;}
   location.href=svc==='whatsapp'?`https://wa.me/${num.replace('+','')}`:svc==='signal'?`https://signal.me/#p/${num}`:svc==='telegram'?`https://t.me/${tg}`:'tel:'+num;}
 function gcal(o){
   const s=o.start?new Date(o.start):new Date(Date.now()+3600000);
@@ -1277,28 +1298,55 @@ function holdToOpen(el,p,before){let tm=0,held=false;
 const kidsOf=id=>PROJ.projects.filter(p=>projLive(p)&&p.parent===id);
 // A project and everything under it, so a project is never placed inside its own subproject.
 const familyOf=id=>{const out=new Set([id]);let grew=true;while(grew){grew=false;for(const p of PROJ.projects)if(p.parent&&out.has(p.parent)&&!out.has(p.id)){out.add(p.id);grew=true;}}return out;};
+// The main board: seed spaces (open commons) first, then conversation spaces with the projects that
+// grew in them nested inside, then projects that belong to no space yet, then the people.
+var SEEDSPACES=LS.get('ob-seedspaces',[]);
+// The board can run at start-up before the conversation list below is declared: read it safely.
+const ivsNow=()=>{try{return IVS;}catch{return LS.get('ob-ivs',{});}};
+function seedSpacesRefresh(){fetch(API+'/api/ss/list',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).then(d=>{SEEDSPACES=d.spaces||[];LS.set('ob-seedspaces',SEEDSPACES);try{renderProjBoard();}catch{}}).catch(()=>{});}
+// Which conversation spaces a project belongs to: the people of the conversations it came from,
+// or a person named on the project itself.
+function spacesOfProject(p){const names=new Set();
+  const IV=ivsNow();for(const id of (p.from||[])){const s=IV[id]||IV[String(id).replace(/\.m4a$/,'')];for(const x of ((s&&s.people)||[]))names.add(String(x).toLowerCase());}
+  for(const x of [p.person,...(p.people||[])])if(x)names.add(String(x).toLowerCase());
+  return SPACES.filter(sp=>names.has(String(sp.name).toLowerCase())||names.has(String(sp.person).toLowerCase()));}
 function renderProjBoard(){const box=$('#proj-main');if(!box)return;
   if(!document.documentElement.classList.contains('backend')){box.innerHTML='';return;}
   const live=PROJ.projects.filter(projLive),ids=new Set(live.map(p=>p.id)),tops=live.filter(p=>!p.parent||!ids.has(p.parent));
   const stage=p=>{try{const b=ASKS.find(a=>a.project===p.id&&askActive(a));return b?' . '+STAGE_LABEL[askStage(b)]:'';}catch{return '';}};
-  // Tapping a project opens it in place; open ones are remembered.
-  const po=LS.get('ob-mainproj',{});
+  // Tapping a project or a space opens it in place; open ones are remembered.
+  const po=LS.get('ob-mainproj',{}),so=LS.get('ob-mainsp',{});
   const row=(p,d)=>{const open=tasksOf(p).filter(n=>!n.done).length;
     return `<button class="pb-row" data-pb="${p.id}" aria-expanded="${!!po[p.id]}" style="padding-left:${d*18}px"><span>${d?'<span class="pb-sub">&#8627;</span> ':''}${escapeHtml(p.name)}</span><small>${escapeHtml(p.status)}${open?' . '+open+' to do':''}${escapeHtml(stage(p))}</small></button>`
       +(po[p.id]?`<div class="pb-body" data-pbb="${p.id}"></div>`:'')
       +(d<4?kidsOf(p.id).map(k=>row(k,d+1)).join(''):'');};
-  const cats=[...new Set(tops.map(p=>p.kind||''))].sort((a,b)=>(!a)-(!b)||a.localeCompare(b));
-  box.innerHTML=`<div class="pb-top"><span class="sec-lbl">Projects</span><button class="tbtn" id="pb-all">Add or sort</button></div>`
-    +(tops.length?cats.map(c=>`<div class="pb-cat">${escapeHtml(c||'No category yet')}</div>`+tops.filter(p=>(p.kind||'')===c).sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name)).map(p=>row(p,0)).join('')).join('')
-      :'<p class="note">No projects yet. Tap Add or sort.</p>')
-    // Conversation spaces: one per person or group, beside the projects, one tap to open.
-    +`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">Conversation spaces</span></div>`
-    +(SPACES.length||WITH_ME.length?[...WITH_ME.map(sp=>({sp,label:sp.name+' and you',meta:`${sp.convs} conversation${sp.convs===1?'':'s'}`})),
-        ...SPACES.map(sp=>({sp,label:'Jay and '+sp.name,meta:`${sp.convs} conversation${sp.convs===1?'':'s'} . ${sp.joined?'joined':'not joined yet'}${sp.fresh?' . '+sp.fresh+' new from them':''}`}))]
-      .map((x,i)=>`<button class="pb-row" data-psp="${i}"><span>${escapeHtml(x.label)}</span><small>${escapeHtml(x.meta)}</small></button>`).join('')
+  const inSpace=new Map(tops.map(p=>[p.id,spacesOfProject(p)]));
+  const unplaced=tops.filter(p=>!inSpace.get(p.id).length);
+  const cats=[...new Set(unplaced.map(p=>p.kind||''))].sort((a,b)=>(!a)-(!b)||a.localeCompare(b));
+  // People: everyone in a space, and everyone tagged in Jay's own recordings, most recent first.
+  const ppl=new Map();for(const sp of SPACES)ppl.set(String(sp.name).toLowerCase(),{name:sp.name,n:sp.convs||0,at:sp.updated||0,sp});
+  for(const [id,s] of Object.entries(ivsNow())){if(!s||s.status!=='done'||String(id).startsWith('import-'))continue;for(const x of (s.people||[])){const k=String(x).toLowerCase(),o=ppl.get(k)||{name:x,n:0,at:0};o.n+=o.sp?0:1;o.at=Math.max(o.at,s.created||0);ppl.set(k,o);}}
+  const people=[...ppl.values()].sort((a,b)=>b.at-a.at).slice(0,16);
+  const spaces=[...WITH_ME.map(sp=>({sp,label:sp.name+' and you',meta:`${sp.convs} conversation${sp.convs===1?'':'s'}`})),
+    ...SPACES.map(sp=>({sp,label:'Jay and '+sp.name,meta:`${sp.convs} conversation${sp.convs===1?'':'s'} . ${sp.joined?'joined':'not joined yet'}${sp.fresh?' . '+sp.fresh+' new from them':''}`}))];
+  box.innerHTML=
+    `<div class="pb-top"><span class="sec-lbl">Seed spaces</span></div>`
+    +(SEEDSPACES.length?SEEDSPACES.map((s,i)=>`<button class="pb-row" data-pss="${i}"><span>${escapeHtml(s.name)}</span><small>open commons . ${s.members} member${s.members===1?'':'s'}</small></button>`).join('')
+      :'<p class="note">None yet.</p>')
+    +`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">Conversation spaces</span><button class="tbtn" id="pb-all">Projects: add or sort</button></div>`
+    +(spaces.length?spaces.map((x,i)=>{const mine=tops.filter(p=>inSpace.get(p.id).some(s=>s.slug===x.sp.slug));
+        return `<button class="pb-row" data-tsp="${i}" aria-expanded="${!!so[x.sp.slug]}"><span>${escapeHtml(x.label)}</span><small>${escapeHtml(x.meta)}${mine.length?' . '+mine.length+' project'+(mine.length===1?'':'s'):''}</small></button>`
+          +(so[x.sp.slug]?`<div class="pb-body"><button class="tbtn" data-osp="${i}" style="margin:6px 0">Open the space</button>${mine.map(p=>row(p,1)).join('')||'<p class="note">No projects in this space yet.</p>'}</div>`:'');}).join('')
       :'<p class="note">No spaces yet. Finish a conversation and tap Share into a space.</p>')
+    +(unplaced.length?`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">Projects not in a space</span></div>`
+      +cats.map(c=>`<div class="pb-cat">${escapeHtml(c||'No category yet')}</div>`+unplaced.filter(p=>(p.kind||'')===c).sort((a,b)=>(b.main-a.main)||a.name.localeCompare(b.name)).map(p=>row(p,0)).join('')).join(''):'')
+    +(people.length?`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">People</span></div><div class="cat-row" style="margin-bottom:0">`
+      +people.map((x,i)=>`<button class="chip" data-ppl="${i}">${escapeHtml(x.name)}${x.n?' <small>'+x.n+'</small>':''}</button>`).join('')+'</div>':'')
     +'<div class="pb-cat" style="margin-top:26px">Tasks</div>';
-  {const all=[...WITH_ME,...SPACES];box.querySelectorAll('[data-psp]').forEach(x=>x.onclick=()=>spOpen(all[+x.dataset.psp]));}
+  box.querySelectorAll('[data-pss]').forEach(x=>x.onclick=()=>{const s=SEEDSPACES[+x.dataset.pss];openSheet('#sheet-space');$('#sp-title').textContent=s.name;$('#sp-frame').src='/s/?s='+encodeURIComponent(s.slug);});
+  box.querySelectorAll('[data-tsp]').forEach(x=>x.onclick=()=>{const sp=spaces[+x.dataset.tsp].sp;so[sp.slug]=!so[sp.slug];LS.set('ob-mainsp',so);renderProjBoard();});
+  box.querySelectorAll('[data-osp]').forEach(x=>x.onclick=()=>spOpen(spaces[+x.dataset.osp].sp));
+  box.querySelectorAll('[data-ppl]').forEach(x=>x.onclick=()=>{const p=people[+x.dataset.ppl];if(p.sp)spOpen(p.sp);else showToast('No space with '+p.name+' yet. Share a conversation with them to make one.');});
   box.querySelectorAll('[data-pb]').forEach(x=>x.onclick=()=>{po[x.dataset.pb]=!po[x.dataset.pb];LS.set('ob-mainproj',po);renderProjBoard();});
   box.querySelectorAll('[data-pb]').forEach(x=>holdToOpen(x,PROJ.projects.find(q=>q.id===x.dataset.pb)));
   box.querySelectorAll('[data-pbb]').forEach(x=>projExtra(PROJ.projects.find(q=>q.id===x.dataset.pbb),x,true));
@@ -2154,6 +2202,15 @@ function renderIv(){
       <input class="nd-when" id="iv-with-new" placeholder="Someone else" aria-label="Someone else" style="flex:1;min-width:120px"></div>
       ${(s.about||[]).length?`<p class="note">Talked about: ${escapeHtml(s.about.join(', '))}</p>`:''}`;
     ivWithOffer=offer;
+    // Who spoke: the laptop's voice model splits the recording by voice. Naming a speaker sets who
+    // the conversation was with and teaches the app that voice for next time.
+    if((s.speakers||[]).length){const sn=s.speakerNames||{};
+      h+=`<div class="iv-h">Who spoke</div><p class="note">Name each voice once. The names become who this was with, and the app learns the voice.</p>`
+        +s.speakers.map(sp=>{const named=sn[String(sp.k)]||'';
+          return `<div style="border-bottom:1px solid var(--line);padding:8px 0"><b>Speaker ${sp.n}</b> <span class="nmeta">${Math.round((sp.share||0)*100)}% of the talk${named?' . '+escapeHtml(named):sp.guess?' . sounds like '+escapeHtml(sp.guess):''}</span>
+            ${(sp.lines||[]).map(l=>`<div class="nmeta" style="font-style:italic">"${escapeHtml(l)}"</div>`).join('')}
+            <div class="cat-row" style="margin:6px 0 0">${['Jay',...offer.filter(p=>p.toLowerCase()!=='jay')].map(p=>`<button class="chip${named.toLowerCase()===p.toLowerCase()?' on':''}" data-spk="${sp.k}" data-spn="${escapeHtml(p)}">${escapeHtml(p)}</button>`).join('')}
+              <input class="nd-when" data-spknew="${sp.k}" placeholder="Someone else" aria-label="Who is speaker ${sp.n}" style="flex:1;min-width:110px"></div></div>`;}).join('');}
   }
   // Share with: tick the spaces (people) this conversation goes into. People heard in it come
   // first, ticked; every other space follows; anyone new can be named. Sharing puts the
@@ -2215,6 +2272,10 @@ function renderIv(){
     await spRefresh(); renderIv();
     showToast(n?`Shared with ${n} space${n===1?'':'s'}`+(unjoined.length?`. ${unjoined.join(', ')} still need${unjoined.length===1?'s':''} the link`:''):'Nothing shared');
   };
+  const nameSpeaker=async(k,name)=>{try{const r=await fetch(API+'/api/interview/speakername',{method:'POST',headers:obHeaders(),body:JSON.stringify({id,k,name})});const d=await r.json();if(!r.ok)throw 0;
+      s.speakerNames=d.speakerNames;s.people=d.people;s.peopleBy='jay';IVS[id]=s;LS.set('ob-ivs',IVS);showToast('Speaker named: '+name);renderIv();}catch{showToast('Could not save that, try again');}};
+  b.querySelectorAll('[data-spk]').forEach(x=>x.onclick=()=>nameSpeaker(x.dataset.spk,x.dataset.spn));
+  b.querySelectorAll('[data-spknew]').forEach(x=>x.onkeydown=e=>{if(e.key==='Enter'&&x.value.trim())nameSpeaker(x.dataset.spknew,x.value.trim());});
   b.querySelectorAll('[data-with]').forEach(x=>x.onclick=()=>{const v=x.dataset.with,cur=s.people||[];
     if(v==='me')return ivSetWith(id,[]);
     const p=ivWithOffer[+v],on=cur.some(c=>c.toLowerCase()===p.toLowerCase());
@@ -2276,11 +2337,12 @@ async function spRefresh(){
 function renderSpaces(){
   // Also on the main list, above the tasks, so each space is one tap away. Spaces someone else
   // opened with this person come first: the conversations, projects and tasks both generated.
-  const strip=$('#sp-strip'); strip.innerHTML=(SPACES.length||WITH_ME.length)?`<div class="iv-h" style="margin-top:0">Shared spaces</div>`:'';
-  for(const sp of WITH_ME){const row=document.createElement('div');row.className='iv-row';row.style.alignItems='center';
+  // In the phone app the board above carries the spaces; the strip is for the browser only.
+  const strip=$('#sp-strip'); strip.innerHTML=document.documentElement.classList.contains('backend')?'':(SPACES.length||WITH_ME.length)?`<div class="iv-h" style="margin-top:0">Shared spaces</div>`:'';
+  if(!document.documentElement.classList.contains('backend'))for(const sp of WITH_ME){const row=document.createElement('div');row.className='iv-row';row.style.alignItems='center';
     row.innerHTML=`<span style="flex:1">${escapeHtml(sp.name)} and you<span class="iv-tag">${sp.convs} conversation${sp.convs===1?'':'s'} . ${sp.tasks} tasks</span></span><button class="tbtn">Open</button>`;
     row.querySelector('button').onclick=()=>spOpen(sp);strip.appendChild(row);}
-  for(const sp of SPACES){const row=document.createElement('div');row.className='iv-row';row.style.alignItems='center';
+  if(!document.documentElement.classList.contains('backend'))for(const sp of SPACES){const row=document.createElement('div');row.className='iv-row';row.style.alignItems='center';
     row.innerHTML=`<span style="flex:1">Jay and ${escapeHtml(sp.name)}<span class="iv-tag">${sp.joined?'joined':'not joined yet'}</span></span><button class="tbtn">Open</button><button class="tbtn">Send link</button>${sp.joined?'<button class="tbtn">Sign-in code</button>':''}`;
     const [o,sn,cd]=row.querySelectorAll('button'); o.onclick=()=>spOpen(sp); sn.onclick=e=>spSend(sp,e.target); if(cd)cd.onclick=e=>spCode(sp,e.target);
     strip.appendChild(row);}
@@ -2682,7 +2744,7 @@ function boot(){
   $('#rh-add').onclick=()=>{addRoutine($('#rh-text').value,+$('#rh-every').value);$('#rh-text').value='';};
   $('#ap-job').innerHTML=JOBS.map(([k,l])=>'<option value="'+k+'">'+l+'</option>').join('');
   $('#ap-add').onclick=()=>{if(!addApp($('#ap-name').value,$('#ap-job').value,$('#ap-url').value))return;$('#ap-name').value='';$('#ap-url').value='';};
-  loadEvents();renderSpaces();spRefresh();revive();syncAlarms();renderProjMain();projRefresh();checkUpdate();maybeBrief();
+  loadEvents();renderSpaces();spRefresh();seedSpacesRefresh();revive();syncAlarms();renderProjMain();projRefresh();checkUpdate();maybeBrief();
 }
 boot();
 </script>
