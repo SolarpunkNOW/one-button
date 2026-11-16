@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#FFFFFF" />
+<title>Theme Space</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Mycelial Minimalism, same as One Button: white paper, ink, spark accent, hairlines, square corners. */
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:720px;margin:0 auto;padding:0 16px 64px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
+  .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 32px/1.1 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:12px 0 6px}
+  h2{font:700 20px "Inter Tight",sans-serif;margin:40px 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 10px;font-size:15px}
+  .seed{border:1px solid var(--line);padding:14px 16px;margin:12px 0}
+  .seed h3{font:700 17px "Inter Tight",sans-serif;margin:4px 0 8px}
+  .pt{margin:8px 0}
+  .q{font-size:14px;border-left:2px solid var(--spark);padding:2px 0 2px 12px;margin-top:4px;font-style:italic;color:var(--muted)}
+  .quote{font-size:15px;border-left:2px solid var(--line);padding:2px 0 2px 12px;margin:10px 0;font-style:italic}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+  button{font:600 14px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--ink);padding:10px 14px;min-height:44px;cursor:pointer;border-radius:0}
+  button:hover{background:var(--surface)}
+  .link{background:none;border:0;padding:0;min-height:0;text-decoration:underline;color:var(--muted);font-weight:500}
+  .proj{border-top:1px solid var(--line);padding:10px 0}
+  .proj b{font-family:"Inter Tight",sans-serif}
+  .hostbar{background:var(--spark);padding:10px 12px;font-size:14px;margin:8px 0 20px}
+  .foot{margin-top:36px;color:var(--muted);font-size:14px}
+  a{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag" id="mode">Theme</span></div>
+  <div id="body"><p class="lede">Opening.</p></div>
+</div>
+<script>
+/* A theme space: seeds (agreed highlights) from conversations across different people's spaces,
+   gathered around one subject, with the projects growing beside them. The host sees every seed
+   with its consent state and can publish the agreed ones; everyone else sees only what has been
+   agreed. The conversations themselves never come here. */
+const $=s=>document.querySelector(s);
+const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
+const SLUG=new URLSearchParams(location.search).get('s')||'';
+function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}
+  try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+const KEY=appKey();
+const post=(route,body)=>fetch(API+'/api/theme/'+route,{method:'POST',headers:{'Content-Type':'application/json',...(KEY?{'x-ob-key':KEY}:{})},body:JSON.stringify(body||{})})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))));
+const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+let HOST=false;
+function render(t){
+  HOST=!!t.convs;$('#mode').textContent=HOST?'Theme, your view':'Theme';
+  const consentLine=s=>!s.consent?'':Object.entries(s.consent).map(([k,v])=>`<span class="tag">${esc(k)}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ');
+  const allOk=s=>s.consent&&Object.values(s.consent).every(v=>v==='ok');
+  const seed=s=>`<div class="seed"><span class="tag">${esc(s.when||'')} . ${esc((s.people||[]).join(' and '))}${s.date?' . '+esc(s.date):''}${s.visibility==='public'?' . public':''}</span><h3>${esc(s.title)}</h3>
+    ${(s.points||[]).map(p=>`<div class="pt">${esc(p.text)}${p.prov&&p.prov.quote?`<div class="q">${p.prov.at?'At '+mmss(p.prov.at)+': ':''}"${esc(p.prov.quote)}"</div>`:''}</div>`).join('')}
+    ${(s.quotes||[]).map(q=>`<div class="quote">${esc(q.text)}</div>`).join('')}
+    <p class="tag" style="margin:10px 0 0">From "${esc(s.convTitle||'')}"</p>
+    ${HOST?`<div class="row">${consentLine(s)}${allOk(s)&&s.visibility!=='public'?`<button data-pub="${esc(s.space)}|${esc(s.doc)}">Publish this seed</button>`:''}${s.visibility==='public'?`<button class="link" data-back="${esc(s.space)}|${esc(s.doc)}">Take it back</button>`:''}${s.link?` <a href="${esc(s.link)}" target="_blank" rel="noopener">Its own page</a>`:''}</div>`:''}</div>`;
+  const waiting=HOST?t.seeds.filter(s=>!allOk(s)).length:0,pub=t.seeds.filter(s=>s.visibility==='public').length;
+  $('#body').innerHTML=`<h1>${esc(t.name)}</h1>
+    <p class="lede">${HOST?`${t.seeds.length} seed${t.seeds.length===1?'':'s'} from ${(t.convs||[]).length} conversation${(t.convs||[]).length===1?'':'s'}, ${pub} public, ${waiting} waiting for someone's yes.`:`Seeds from conversations on this theme, each shared with the agreement of everyone who was in it.`}</p>
+    ${HOST?`<div class="hostbar">Only you see the seeds that are not yet agreed. The public page shows ${pub} seed${pub===1?'':'s'}. <button class="link" id="rebuild">Look for new conversations</button> . <a href="${location.pathname}?s=${esc(SLUG)}&public=1" target="_blank" rel="noopener">See the public view</a></div>`:''}
+    <h2>Seeds</h2>${t.seeds.length?t.seeds.map(seed).join(''):'<p class="lede">Nothing agreed yet.</p>'}
+    <h2>Projects growing here</h2>${(t.projects||[]).length?t.projects.map(p=>`<div class="proj"><b>${esc(p.name)}</b> <span class="tag">${esc(p.status||'')}${HOST&&p.people?' . with '+esc(p.people.join(', ')):''}</span><div style="font-size:15px;color:var(--muted)">${esc(p.about||'')}</div></div>`).join(''):'<p class="lede">None yet.</p>'}
+    <p class="foot">Made with One Button. Each seed comes from a private conversation that stays with the people who had it. Theme built ${t.built?new Date(t.built).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):''}.</p>`;
+  document.querySelectorAll('[data-pub],[data-back]').forEach(b=>b.onclick=()=>{const [space,doc]=(b.dataset.pub||b.dataset.back).split('|');b.disabled=true;
+    post('publish',{slug:SLUG,space,doc,to:b.dataset.back?'private':'public'}).then(load).catch(e=>{b.disabled=false;alert(e.message);});});
+  const rb=$('#rebuild');if(rb)rb.onclick=()=>{rb.textContent='Looking…';post('get',{slug:SLUG}).then(x=>post('build',{slug:SLUG,name:x.name,words:x.words})).then(load).catch(e=>{rb.textContent=e.message;});};
+}
+const PUBLIC_VIEW=new URLSearchParams(location.search).get('public')==='1';
+function load(){return fetch(API+'/api/theme/get',{method:'POST',headers:{'Content-Type':'application/json',...(KEY&&!PUBLIC_VIEW?{'x-ob-key':KEY}:{})},body:JSON.stringify({slug:SLUG})})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status)))).then(render)
+  .catch(e=>{$('#body').innerHTML='<h1>Not here</h1><p class="lede">'+esc(e.message)+'</p>';});}
+load();
+</script>
+</body>
+</html>
