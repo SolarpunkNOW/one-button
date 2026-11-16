@@ -106,6 +106,14 @@
     <div class="hidden" id="put-form"></div>
   </div>
 
+  <div id="topicbar"></div>
+  <div id="mf-wrap" class="hidden">
+  <h2>Move forward together</h2>
+  <p class="lede">Reads every conversation in this space (never the parts marked private), the projects and the open tasks, and proposes a few merged projects to move forward with, each with first steps. Each of you says yes or not now. A step can be yours, both, or dropped. When everyone says yes, it becomes an agreed project here and its steps become tasks; the ideas it brought together step aside.</p>
+  <div class="row"><button id="mf-go">Put our conversations together</button><span class="tag" id="mf-say"></span></div>
+  <div id="mf"></div>
+  </div>
+
   <h2>How it connects</h2>
   <p class="lede">Projects, and the conversations they came from. Tap one to light up its links.</p>
   <svg id="map" viewBox="0 0 680 400" role="img" aria-label="Map of projects and the conversations they came from"></svg>
@@ -142,6 +150,12 @@
   <p class="lede">The parts of this space you both agree can travel: a few points and lines, each pointing at the moment it came from. The conversations themselves stay here.</p>
   <div id="hl-make" class="hidden"><div class="row"><button id="hl-go">Make a highlight from the ticked conversations</button></div><p class="tag" style="margin:8px 0 0" id="hl-say">Tick conversations below, then tap.</p></div>
   <div id="highlights"></div>
+
+  <div id="bridges-wrap" class="hidden">
+  <h2>For someone else's space</h2>
+  <p class="lede">What these conversations said about someone else's work, summarised for them. It reaches their space only when everyone here has said yes, and comes back out if anyone changes their mind.</p>
+  <div id="bridges"></div>
+  </div>
 
   <h2>Presentations</h2>
   <p class="lede">Slides made only from what everyone here has agreed: shared passages and agreed highlights, with their soundbites. Each needs everyone's yes before it can be made public.</p>
@@ -204,7 +218,24 @@ const DEMO={
 
 const $=s=>document.querySelector(s);
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// A topic subspace: the same space seen through one topic. Conversations that touch it, and the
+// projects, tasks, passages and seeds that came from them. Its public face is a seed space.
+let SSLIST=null;
+function loadSSList(){if(SSLIST)return Promise.resolve(SSLIST);return post('../ss/list',{}).then(r=>{SSLIST=r.spaces||[];return SSLIST;}).catch(()=>{SSLIST=[];return SSLIST;});}
+function topicOf(D,slug){const sy=(D.synth&&D.synth.topics)||[];const t=sy.find(x=>x.slug===slug);if(t)return t;
+  const ss=(SSLIST||[]).find(x=>x.slug===slug);if(ss)return {slug,name:ss.name,about:ss.about,words:ss.words||[]};
+  return {slug,name:slug.replace(/-/g,' ').replace(/^./,c=>c.toUpperCase()),about:'',words:[slug.replace(/-/g,' ')]};}
+function topicView(D,tp){const w=(tp.words||[]).map(x=>String(x).toLowerCase()).filter(Boolean);
+  const hit=(...xs)=>{const s=xs.map(x=>Array.isArray(x)?x.join(' '):String(x||'')).join(' ').toLowerCase();return w.some(x=>s.includes(x));};
+  const convs=D.convs.filter(c=>hit(c.title,c.summary,c.points,c.quotes)),ids=new Set(convs.map(c=>c.id));
+  const projects=D.projects.filter(p=>p.topic===tp.slug||hit(p.name,p.about,p.next)||(p.convs||[]).some(c=>ids.has(c)));
+  const pids=new Set(projects.map(p=>p.id));
+  return {...D,convs,projects:projects.map(p=>({...p,convs:(p.convs||[]).filter(c=>ids.has(c))})),tasks:D.tasks.filter(x=>ids.has(x.from)||pids.has(x.project)||hit(x.text)),
+    marks:(D.marks||[]).filter(m=>ids.has(m.conv)),docs:D.docs.filter(d=>!d.from||ids.has(d.from)||(d.convs||[]).some(c=>ids.has(c))),links:(D.links||[]).filter(l=>pids.has(l[0])&&pids.has(l[1])),topicIds:ids};}
 function render(D){
+const TOPIC=new URLSearchParams(location.search).get('topic');
+const FULL=D;
+if(TOPIC){if(!SSLIST){loadSSList().then(()=>{LAST='';render(FULL);});}D=topicView(D,topicOf(D,TOPIC));}
 $('#preview').textContent=D.banner||'';$('#preview').classList.toggle('hidden',!D.banner);
 const name=id=>id==='both'?'Both of you':id===D.viewer?'You':(D.people.find(p=>p.id===id)||{}).name||id;
 const conv=id=>D.convs.find(c=>c.id===id)||{title:'',date:''};
@@ -214,6 +245,13 @@ $('#title').textContent=D.people.map(p=>p.id===D.viewer?'You':p.name).join(' and
 const pl=(n,w)=>n+' '+w+(n===1?'':'s');
 $('#lede').textContent=`${pl(D.convs.length,'conversation')}, ${pl(D.projects.length,'project')} growing from ${D.convs.length===1?'it':'them'}.`;
 $('#since').textContent=D.since;
+{const tps=(FULL.synth&&FULL.synth.topics)||[],base=location.pathname+'?s='+encodeURIComponent(SLUG);
+  if(TOPIC){const tp=topicOf(FULL,TOPIC),ss=(SSLIST||[]).find(x=>x.slug===TOPIC);
+    $('#topicbar').innerHTML=`<div class="box" style="border-color:var(--ink)"><span class="tag">Subspace</span><h3 style="margin:2px 0">${esc(tp.name)}</h3><div>${esc(tp.about||'')}</div>
+      <p class="tag" style="margin:8px 0 0">${D.convs.length} of ${FULL.convs.length} conversations touch it . private to the people in this space</p>
+      <div class="row"><a class="btn" href="${base}">Back to the whole space</a>${ss?`<a class="btn" href="/s/?s=${esc(ss.slug)}" target="_blank" rel="noopener">Its public seed space</a>${ss.parent!==SLUG&&ACT&&ACT.key?`<button id="tp-attach">Make it this subspace's public face</button>`:''}`:(ACT&&ACT.key?`<button id="tp-make">Open a public seed space for it</button>`:'')}</div></div>`;
+    const mk=$('#tp-make')||$('#tp-attach');if(mk)mk.onclick=()=>{mk.disabled=true;post('../ss/create',{slug:TOPIC,name:tp.name,about:tp.about||'',words:tp.words||[],parent:SLUG},headers()).then(()=>{SSLIST=null;say('Its public seed space is ready. Everyone in this space is a member.');loadSSList().then(()=>{LAST='';render(FULL);});}).catch(e=>{mk.disabled=false;say(e.message);});};}
+  else $('#topicbar').innerHTML=tps.length?`<div class="row" style="margin-top:4px"><span class="tag">Subspaces</span>${tps.map(x=>`<a class="btn" href="${base}&topic=${encodeURIComponent(x.slug)}">${esc(x.name)}</a>`).join('')}</div>`:'';}
 
 // Update choice (preview only: nothing is saved).
 document.querySelectorAll('#how button').forEach(b=>b.onclick=()=>{
@@ -359,10 +397,12 @@ const doFind=()=>{const q=$('#find-q').value.trim();if(!q)return;$('#find-out').
     wireProv();}).catch(e=>{$('#find-out').innerHTML='<p class="tag">'+esc(e.message)+'</p>';});};
 $('#find-go').onclick=doFind;$('#find-q').onkeydown=e=>{if(e.key==='Enter')doFind();};
 
+window.__tpIds=D.topicIds||null;
 // Seeds: harvested here, agreed here, then out to a seed space.
 const SEEDLBL={private:'waiting for everyone\'s yes',agreed:'agreed, ready for a seed space',offered:'offered to a seed space',public:'public in a seed space'};
 function loadSeeds(){if(!ACT)return;actCall('seeds',{slug:SLUG}).then(r=>Promise.all([r,post('../ss/list',{}).catch(()=>({spaces:[]}))])).then(([r,l])=>{
   const me=r.me,ss=l.spaces||[];
+  const tpIds=(window.__tpIds||null);if(tpIds)r.seeds=r.seeds.filter(s=>s.prov&&tpIds.has(s.prov.conv));
   $('#seeds').innerHTML=r.seeds.length?r.seeds.map(s=>{const mine=(s.consent||{})[me],all=Object.values(s.consent||{}).every(v=>v==='ok');
     return `<div class="box"><span class="tag">${esc(s.kind)} . ${esc(SEEDLBL[s.status]||s.status)}${s.seedSpace?' . '+esc(s.seedSpace):''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>
       ${s.prov&&s.prov.conv?`<span class="tag" style="display:block;margin-top:4px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(s.prov.conv)}" data-at="${+s.prov.at||0}">From ${esc(s.convTitle||'a conversation')}${s.prov.at?' at '+mmss(s.prov.at):''}</button>${s.prov.quote?': "'+esc(s.prov.quote)+'"':''}</span>`:''}
@@ -412,7 +452,35 @@ document.querySelectorAll('[data-mback]').forEach(b=>b.onclick=()=>{b.disabled=t
 // Re-draw any open transcript so marked lines show.
 Object.keys(SEGS).forEach(id=>{const t=$('#tr-'+id);if(t&&!t.classList.contains('hidden'))drawLines(id);});
 
+// Move forward: the synthesis across conversations, decided item by item by everyone here.
+$('#mf-wrap').classList.toggle('hidden',!ACT);
+{const sy=FULL.synth||{items:[]},items=(sy.items||[]).filter(it=>!TOPIC||it.topic===TOPIC||(D.topicIds&&(it.refs||[]).some(r=>D.topicIds.has(r.split('@')[0]))));
+  const refLink=r=>{const [c,at]=r.split('@');return `<button class="link" data-prov="${esc(c)}" data-at="${Math.round(+at||0)}">${esc(conv(c).title||c)}${+at?' '+mmss(Math.round(+at)):''}</button>`;};
+  $('#mf-say').textContent=sy.at?'Last put together '+new Date(sy.at).toLocaleDateString('en-GB',{day:'numeric',month:'short'})+'. Running it again keeps what you agreed and replaces the rest.':'';
+  $('#mf').innerHTML=items.length?items.map(it=>{const mine=(it.decide||{})[ME];
+    return `<div class="box" style="${it.status==='agreed'?'border-color:var(--ink)':''}"><span class="tag">${it.status==='agreed'?'agreed by everyone':'proposed'}${it.topic?' . '+esc(it.topic.replace(/-/g,' ')):''}</span><h3>${esc(it.name)}</h3><div>${esc(it.about)}</div>
+      ${(it.merges||[]).length?`<p class="tag" style="margin:8px 0 0;text-transform:none;letter-spacing:0">Brings together: ${esc(it.merges.join(', '))}</p>`:''}
+      ${(it.refs||[]).length?`<p class="tag" style="margin:6px 0 0;text-transform:none;letter-spacing:0">Rests on: ${it.refs.map(refLink).join(' . ')}</p>`:''}
+      <div class="who" style="margin-top:10px"><span class="tag">First steps</span>${(it.steps||[]).map(st=>`<div class="task" style="${st.dropped?'opacity:.45':''}"><span style="flex:1">${st.dropped?'<s>':''}${esc(st.text)}${st.dropped?'</s>':''}<span class="tag">${esc(name(st.who))}</span></span>
+        ${it.status!=='agreed'&&ACT?`<button class="link" data-mfs="${esc(it.id)}|${esc(st.id)}|mine">Mine</button> <button class="link" data-mfs="${esc(it.id)}|${esc(st.id)}|both">Both</button> <button class="link" data-mfs="${esc(it.id)}|${esc(st.id)}|dropstep">${st.dropped?'Keep':'Drop'}</button>`:''}</div>`).join('')}</div>
+      <div class="row">${Object.entries(it.decide||{}).map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='yes'?'yes':v==='no'?'not now':'not yet'}</span>`).join(' ')}</div>
+      ${it.status!=='agreed'&&ACT&&mine!==undefined?`<div class="row">${mine!=='yes'?`<button data-mfd="${esc(it.id)}|yes">Yes, let's do this</button>`:''}${mine!=='no'?`<button class="link" data-mfd="${esc(it.id)}|no">Not now</button>`:''}</div>`:''}</div>`;}).join('')
+    :'<p class="tag">Nothing put together yet. Tap the button above.</p>';
+  const go=$('#mf-go');go.onclick=()=>{go.disabled=true;$('#mf-say').textContent='Reading every conversation in this space. About a minute.';
+    actCall('synth',{slug:SLUG}).then(r=>{$('#mf-say').textContent=r.items+' things to move forward with, and '+r.topics+' topics.';if(REFRESH)REFRESH().then(x=>{LAST='';show(x);}).catch(()=>{});}).catch(e=>{$('#mf-say').textContent=e.message;}).then(()=>{go.disabled=false;});};
+  document.querySelectorAll('[data-mfs]').forEach(b=>b.onclick=()=>{const [item,step,act]=b.dataset.mfs.split('|');actCall('synthset',{slug:SLUG,item,step,act}).then(()=>{if(REFRESH)REFRESH().then(x=>{LAST='';show(x);}).catch(()=>{});}).catch(e=>say(e.message));});
+  document.querySelectorAll('[data-mfd]').forEach(b=>b.onclick=()=>{const [item,act]=b.dataset.mfd.split('|');b.disabled=true;actCall('synthset',{slug:SLUG,item,act}).then(r=>{say(r.made?'Agreed by everyone: it is now a project here, with its steps as tasks.':act==='yes'?'Your yes is in.':'Noted: not now.');if(REFRESH)REFRESH().then(x=>{LAST='';show(x);}).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});}
+
 // Presentations: made from agreed material, presented here, public with everyone's yes.
+// Bridges out of this space, and what came in from other spaces.
+{const br=D.docs.filter(d=>d.kind==='Bridge'),inn=D.docs.filter(d=>d.kind==='From another conversation');
+  $('#bridges-wrap').classList.toggle('hidden',!br.length&&!inn.length);
+  $('#bridges').innerHTML=br.map(h=>{const cs=Object.entries(h.consent||{}),all=cs.length&&cs.every(([,v])=>v==='ok'),mine=h.consent&&h.consent[ME];
+    return `<div class="box"><span class="tag">for ${esc(h.who)} . ${all?'in '+esc(h.who)+"'s space":'waiting for a yes'}${byTag(h)}</span><h3>${esc(h.title)}</h3>
+      ${(h.points||[]).map(x=>`<div style="margin:8px 0">${esc(x.text)}${provLine(x)}</div>`).join('')}
+      <div class="row">${cs.map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ')}</div>
+      ${ACT&&mine!==undefined?`<div class="row">${mine!=='ok'?`<button data-hlok="${esc(h.id)}">Yes, ${esc(h.who)} can see this</button>`:''}${mine!=='no'?`<button class="link" data-hlno="${esc(h.id)}">${all?'Take it back':'Not this'}</button>`:''}</div>`:''}</div>`;}).join('')
+    +inn.map(h=>`<div class="box"><span class="tag">from another conversation . ${esc(((h.lineage||{}).people||[]).join(' and '))}</span><h3>${esc(h.title)}</h3>${(h.points||[]).map(x=>`<div style="margin:8px 0">${esc(x.text)}</div>`).join('')}<p class="tag" style="margin:8px 0 0;text-transform:none;letter-spacing:0">${esc(h.note||'')}</p></div>`).join('');}
 const decks=D.docs.filter(d=>d.kind==='Presentation');
 $('#deck-make').classList.toggle('hidden',!ACT);
 $('#deck-go').onclick=()=>{$('#deck-go').disabled=true;$('#deck-say').textContent='Making the slides…';actCall('present',{slug:SLUG}).then(()=>{$('#deck-say').textContent='Made. Everyone here says yes before it can go public.';if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{$('#deck-say').textContent=e.message;}).then(()=>{$('#deck-go').disabled=false;});};
@@ -465,7 +533,7 @@ if(sels.length&&ACT&&ACT.key){post('list',{},headers()).then(l=>{const opts=(l.s
   sels.forEach(s=>{s.insertAdjacentHTML('beforeend',opts);s.onchange=()=>{if(!s.value)return;s.disabled=true;hlCall('publish',{slug:SLUG,doc:s.dataset.hlto,to:s.value}).then(()=>say('Shared into that space.')).catch(e=>{s.disabled=false;say(e.message);});};});}).catch(()=>{});}
 
 $('#distilled').innerHTML=
-  D.docs.filter(d=>d.kind!=='Highlight').map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
+  D.docs.filter(d=>!['Highlight','Presentation','Bridge','From another conversation'].includes(d.kind)).map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
   `<details class="box" open><summary>Key points</summary><ul class="pts">${D.convs.flatMap(c=>c.points).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></details>`+
   `<details class="box"><summary>Words worth keeping</summary>${D.convs.flatMap(c=>c.quotes.map(q=>`<div class="quote">${esc(q)}<br><span class="tag">${esc(c.title)}</span></div>`)).join('')}</details>`;
 
@@ -556,7 +624,7 @@ function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey
   try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
 const post=(route,body,headers={})=>fetch(API+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)})
   .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))));
-function stripInvite(){try{history.replaceState(null,'',location.pathname+'?s='+encodeURIComponent(SLUG));}catch(e){}}
+function stripInvite(){try{const tp=new URLSearchParams(location.search).get('topic');history.replaceState(null,'',location.pathname+'?s='+encodeURIComponent(SLUG)+(tp?'&topic='+encodeURIComponent(tp):''));}catch(e){}}
 const NAME=String(SLUG||'').replace(/^jay-/,'');
 const FIELD='display:block;width:100%;box-sizing:border-box;font:16px "Inter",sans-serif;padding:10px;margin:6px 0 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink)';
 

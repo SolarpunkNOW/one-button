@@ -964,6 +964,19 @@ async function spForPerson(body) {
     update: { date: "Example", lines: ["What is new in this space shows here once a day, only on days something changed."] },
   };
   const title = iv.title || iv.name;
+  // An imported transcript (not a phone recording) has no vault file for the laptop to rebuild the
+  // space from, so it goes into the part of the space the rebuild never touches.
+  if (iv.imported && s.exists) {
+    const a = s.data().added || {}, all = [...(data.convs || []), ...(a.convs || [])];
+    if (all.some((c) => c.iv === iv.id || c.title === title)) return [200, { ok: true, slug, name, joined: !!s.data().joined, added: false }];
+    const add = convFromInterview(iv, 0);
+    add.conv.id = "m" + Date.now().toString(36); add.conv.by = "jay"; add.conv.at = Date.now(); add.conv.note = "Imported transcript";
+    add.tasks.forEach((x) => { x.from = add.conv.id; });
+    add.projects.forEach((x, i) => { x.id = add.conv.id + "p" + i; x.convs = [add.conv.id]; });
+    await splitConvs(slug, [add.conv]);
+    await pushAdded(slug, { convs: [add.conv], tasks: add.tasks, projects: add.projects });
+    return [200, { ok: true, slug, name, joined: !!s.data().joined, added: true }];
+  }
   if (!data.convs.some((c) => c.iv === iv.id || c.title === title)) {
     const add = convFromInterview(iv, data.convs.length + 1);
     // The recording stays listenable for the space if the server still holds it.
@@ -1065,7 +1078,7 @@ const addedList = (o) => { const a = o.added || {}; return [...(a.convs || []), 
 function withAdded(s) {
   const d = s.data().data || {}, a = s.data().added || ADDED;
   return { ...d, convs: [...(d.convs || []), ...(a.convs || [])], tasks: [...(d.tasks || []), ...(a.tasks || [])],
-    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])], marks: a.marks || [] };
+    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])], marks: a.marks || [], synth: a.synth || null, merged: a.merged || {} };
 }
 // Who is acting on a space: a signed-in member (Weave token), or the host through the app key.
 async function actorFor(req, body, slug, visitor) {
@@ -1450,6 +1463,159 @@ async function spAsk(req, body, visitor) {
   return [200, { q, answer: String(answer || "No answer came back.").slice(0, 6000) }];
 }
 
+/* ---------- Move forward: synthesis across a space's conversations ----------
+ * Reads every conversation in a shared space (private stretches left out), the projects and the open
+ * tasks, and proposes a short list of merged projects to move forward with, each with first steps and
+ * who might take them, plus the topics running through the space (each a subspace). Every person in
+ * the space says yes or not now to each item; a step can be taken ("mine"), shared ("both") or
+ * dropped. When everyone has said yes, the item becomes an agreed project in the space and its steps
+ * become tasks; the projects it merged step aside. */
+const SYNTH_SYS = (names) => `You help ${names} decide what to move forward with together, from all their conversations. Reply with JSON only:
+{"topics": [{"name": "2 to 4 words", "about": "one sentence", "words": ["3 to 6 lowercase words or phrases that mark this topic in a transcript"]}],
+ "items": [{"name": "short project name", "about": "two plain sentences: what it is and why now", "topic": "one of the topic names",
+   "merges": ["names of existing projects this brings together, exactly as listed"],
+   "steps": [{"text": "a first step, starting with a verb", "who": "${names.split(" and ")[0].toLowerCase()}" or "${(names.split(" and ")[1] || "").toLowerCase()}" or "both"}],
+   "refs": ["markers like c2@431 for the moments it rests on"]}]}
+3 to 6 topics and 3 to 7 items, the strongest only. Merge overlapping ideas into one item. Assign a step to a person only if the conversations show them offering or best placed; otherwise "both". Use only what the conversations say. Never anything about anyone's personality, money, health or family. Plain English, no em dashes.`;
+async function spSynth(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), people = d.people || [];
+  const parts = [];
+  for (const c of (d.convs || []).filter((x) => !x.held)) {
+    const w = await wordsFor(slug, c);
+    const segs = w.segments && w.segments.length ? w.segments : null;
+    const body2 = segs ? segs.filter((_, i) => i % 3 === 0).slice(0, 140).map(([at, x]) => `[${c.id}@${at}] ${x}`).join("\n") : `[${c.id}@0] ` + String(w.transcript || "").slice(0, 5000);
+    parts.push(`## ${c.id}: ${c.title} (${c.date})\nSummary: ${c.summary || ""}\n${body2}`);
+  }
+  const projects = (d.projects || []).filter((p) => !p.held).map((p) => `- ${p.name}: ${p.about || ""}`).join("\n");
+  const open = (d.tasks || []).filter((t) => !t.held && !t.done).slice(0, 80).map((t) => `- (${t.who}) ${t.text}`).join("\n");
+  const names = people.map((p) => p.name).join(" and ");
+  const out = await chat({ messages: [{ role: "system", content: SYNTH_SYS(names) }, { role: "user", content: `Existing projects:\n${projects}\n\nOpen tasks:\n${open}\n\nConversations:\n${parts.join("\n\n")}`.slice(0, 120000) }] }, 5000);
+  let got = null;
+  try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!got || !Array.isArray(got.items)) return [502, { error: "could not put it together this time; try again" }];
+  const ids = new Set(people.map((p) => p.id)), at = Date.now();
+  const kids = (await ssCol().where("parent", "==", slug).get()).docs.map((x) => x.data().slug);
+  const same = (a, b) => a.startsWith(b) || b.startsWith(a);
+  const topics = (Array.isArray(got.topics) ? got.topics : []).slice(0, 6).map((x) => { const s0 = pidOf(x.name).slice(0, 34), k = kids.find((y) => same(s0, y));
+    return { slug: k || s0, name: String(x.name || "").slice(0, 60), about: String(x.about || "").slice(0, 300), words: (Array.isArray(x.words) ? x.words : []).map((w) => String(w).toLowerCase().slice(0, 40)).slice(0, 8) }; }).filter((x) => x.slug);
+  const topicSlug = (name) => { const s0 = pidOf(name || "").slice(0, 34); const k = topics.find((y) => same(s0, y.slug) || pidOf(y.name) === s0); return k ? k.slug : s0; };
+  const items = got.items.slice(0, 8).map((x, i) => {
+    const decide = {}; for (const p of people) decide[p.id] = "pending";
+    return { id: "f" + (at + i).toString(36), name: String(x.name || "").slice(0, 120), about: String(x.about || "").slice(0, 600), topic: topicSlug(x.topic),
+      merges: (Array.isArray(x.merges) ? x.merges : []).map((m) => String(m).slice(0, 120)).slice(0, 8),
+      steps: (Array.isArray(x.steps) ? x.steps : []).slice(0, 6).map((st, j) => ({ id: "f" + (at + i).toString(36) + "s" + j, text: String((st && st.text) || st).slice(0, 300), who: ids.has(String(st && st.who).toLowerCase()) ? String(st.who).toLowerCase() : "both", dropped: false })),
+      refs: (Array.isArray(x.refs) ? x.refs : []).map((r) => String(r).replace(/[\[\]]/g, "")).filter((r) => /^[\w-]+@\d+(\.\d+)?$/.test(r)).slice(0, 6),
+      decide, status: "proposed" };
+  });
+  // Agreed items stay; a new run replaces only what is still open.
+  const ref = spaceRef(slug);
+  await admin.firestore().runTransaction(async (t) => {
+    const x = await t.get(ref), a = { ...ADDED, ...(x.data().added || {}) }, old = a.synth || {};
+    const kept = (old.items || []).filter((it) => it.status === "agreed");
+    a.synth = { at, by: by.id, topics: topics.length ? topics : (old.topics || []), items: [...kept, ...items] };
+    t.set(ref, { added: a, updated: Date.now() }, { merge: true });
+  });
+  return [200, { ok: true, items: items.length, topics: topics.length }];
+}
+async function spSynthSet(req, body, visitor) {
+  const slug = String(body.slug || ""), iid = String(body.item || ""), act = String(body.act || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const ref = spaceRef(slug);
+  const res = await admin.firestore().runTransaction(async (t) => {
+    const x = await t.get(ref);
+    if (!x.exists) throw Object.assign(new Error("no such space"), { code: 404 });
+    const a = { ...ADDED, ...(x.data().added || {}) }, sy = a.synth || { items: [] };
+    const it = (sy.items || []).find((y) => y.id === iid);
+    if (!it) throw Object.assign(new Error("no such item"), { code: 404 });
+    if (!(by.id in (it.decide || {}))) throw Object.assign(new Error("only the people in the space decide"), { code: 403 });
+    const st = body.step ? it.steps.find((y) => y.id === body.step) : null;
+    if (act === "mine" && st) st.who = by.id;
+    else if (act === "both" && st) st.who = "both";
+    else if (act === "dropstep" && st) st.dropped = !st.dropped;
+    else if (act === "yes" || act === "no") it.decide[by.id] = act === "yes" ? "yes" : "no";
+    else throw Object.assign(new Error("unknown action"), { code: 400 });
+    let made = null;
+    if (it.status !== "agreed" && Object.values(it.decide).every((v) => v === "yes")) {
+      // Agreed by everyone: an agreed project in the space, its steps as tasks, merged projects step aside.
+      it.status = "agreed";
+      const at = Date.now(), pid = "a" + at.toString(36);
+      const convs = [...new Set(it.refs.map((r) => r.split("@")[0]))];
+      const prov = it.refs[0] ? { conv: it.refs[0].split("@")[0], at: Number(it.refs[0].split("@")[1]) || 0, quote: "" } : null;
+      a.projects = [...(a.projects || []), { id: pid, name: it.name, status: "Agreed", about: it.about, next: (it.steps.find((y) => !y.dropped) || {}).text || "", convs, held: "", by: "both", at, topic: it.topic, agreed: true, ...(prov ? { prov } : {}) }];
+      a.tasks = [...(a.tasks || []), ...it.steps.filter((y) => !y.dropped).map((y, j) => ({ who: y.who, text: y.text, done: false, from: convs[0] || "", due: "", held: "", by: "both", at: at + j, project: pid, ...(prov ? { prov } : {}) }))];
+      a.merged = { ...(a.merged || {}) }; for (const m of it.merges || []) a.merged[m] = pid;
+      it.project = pid; made = pid;
+    }
+    a.synth = sy;
+    t.set(ref, { added: a, updated: Date.now() }, { merge: true });
+    return { status: it.status, made };
+  });
+  return [200, { ok: true, ...res }];
+}
+
+/* ---------- Bridges between spaces ----------
+ * What one conversation space said about someone else (Jay and Simon talking about Cordell's model)
+ * belongs to the people who had that conversation. A bridge summarises it, with the moments it rests
+ * on, inside that space; when everyone there has said yes, it is carried into the other person's space
+ * with its lineage. Taking it back removes the carried copy. */
+const BRIDGE_SYS = (who) => `From these conversation excerpts, summarise the ideas that relate to ${who} and their work, for ${who} to read. Reply with JSON only:
+{"title": "at most 8 words", "points": [{"text": "one or two plain sentences, written to ${who}", "ref": "the marker of the line it rests on, like c2@431"}]}
+3 to 8 points. Only ideas about ${who}'s work and how others might build on it. Never anything about anyone's personality, money, health or family; nothing private about the people talking. Credit ideas to "the conversation", never to a named person. No em dashes.`;
+async function spBridge(req, body, visitor) {
+  const slug = String(body.slug || ""), to = String(body.to || ""), who = String(body.who || "").trim().slice(0, 40);
+  if (!SLUG_RE.test(slug) || !SLUG_RE.test(to) || !who) return [400, { error: "bad request" }];
+  const by = await actorFor(req, body, slug, visitor);
+  if (!(await spaceRef(to).get()).exists) return [404, { error: "no such space to carry it to" }];
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  const d = withAdded(s), wanted = (Array.isArray(body.convs) ? body.convs : []).map(String);
+  const convs = (d.convs || []).filter((c) => !c.held && (!wanted.length || wanted.includes(c.id)));
+  const parts = [];
+  for (const c of convs) {
+    const w = await wordsFor(slug, c), segs = w.segments && w.segments.length ? w.segments : null;
+    const hit = segs ? segs.filter(([, x]) => String(x).toLowerCase().includes(who.toLowerCase())) : [];
+    if (!segs && !String(w.transcript || c.summary || "").toLowerCase().includes(who.toLowerCase())) continue;
+    const near = segs ? segs.filter(([at]) => hit.some(([h]) => Math.abs(at - h) <= 90)) : [];
+    parts.push(`## ${c.id}: ${c.title}\n` + (segs ? near.map(([at, x]) => `[${c.id}@${at}] ${x}`).join("\n") : `[${c.id}@0] ` + String(w.transcript || c.summary || "").slice(0, 8000)));
+  }
+  if (!parts.length) return [404, { error: "nothing in these conversations mentions " + who }];
+  const out = await chat({ messages: [{ role: "system", content: BRIDGE_SYS(who) }, { role: "user", content: parts.join("\n\n").slice(0, 80000) }] }, 2500);
+  let got = null;
+  try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!got || !Array.isArray(got.points)) return [502, { error: "could not write it this time" }];
+  const at = Date.now(), id = "g" + at.toString(36);
+  const points = got.points.slice(0, 10).map((x) => { const r = String((x && x.ref) || "").replace(/[\[\]]/g, ""), m = r.match(/^([\w-]+)@(\d+(?:\.\d+)?)$/);
+    return { text: String((x && x.text) || x).slice(0, 400), prov: m ? { conv: m[1], at: Number(m[2]) || 0, quote: "" } : null }; });
+  const consent = {}; for (const p of d.people || []) consent[p.id] = p.id === by.id ? "ok" : "pending";
+  await pushAdded(slug, { docs: [{ id, kind: "Bridge", to, who, title: String(got.title || "Ideas for " + who).slice(0, 120), when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+    body: points.map((x) => x.text).join("\n"), points, convs: convs.map((c) => c.id), by: by.id, at, consent, visibility: "space", origin: slug }] });
+  return [200, { ok: true, id }];
+}
+// Called after any yes or no on a bridge: carry it over when everyone agrees, take it back otherwise.
+async function bridgeSync(slug, doc) {
+  if (!doc || doc.kind !== "Bridge") return;
+  const all = Object.values(doc.consent || {}).every((v) => v === "ok");
+  const ref = spaceRef(doc.to);
+  await admin.firestore().runTransaction(async (t) => {
+    const x = await t.get(ref);
+    if (!x.exists) return;
+    const a = { ...ADDED, ...(x.data().added || {}) }, cid = doc.id + "-in-" + doc.to;
+    const has = (a.docs || []).some((y) => y.id === cid);
+    if (all && !has) {
+      const from = await spaceRef(slug).get(), people = (((from.data() || {}).data || {}).people || []).map((p) => p.name);
+      a.docs = [...(a.docs || []), { id: cid, kind: "From another conversation", title: doc.title, when: doc.when, body: doc.body, points: (doc.points || []).map((p) => ({ text: p.text })), by: "both", at: Date.now(),
+        lineage: { space: slug, doc: doc.id, people }, note: "Shared with the agreement of everyone in the conversation it came from." }];
+    } else if (!all && has) a.docs = (a.docs || []).filter((y) => y.id !== cid);
+    else return;
+    t.set(ref, { added: a, updated: Date.now() }, { merge: true });
+  });
+}
+
 /* ---------- Seeds and seed spaces ----------
  * A seed is an idea, project or question harvested from a conversation, pointing at the moment
  * it came from. It belongs to the people who were in that conversation: it stays private until
@@ -1550,11 +1716,17 @@ async function ssActor(req, body, slug, visitor) {
   const r = await fetch(WEAVE + "/session", { method: "POST", headers: { "content-type": "application/json", ...(visitor ? { "x-forwarded-for": visitor } : {}) },
     body: JSON.stringify({ token, requireCommunity: "ss-" + slug }) });
   const v = await r.json().catch(() => ({}));
-  if (!v || !v.ok) return null;
-  return { id: pidOf(String(v.agentName || "").split("/@").pop()), key: false };
+  if (v && v.ok) return { id: pidOf(String(v.agentName || "").split("/@").pop()), key: false };
+  // Signed in to the conversation space this seed space grew from: the people in it are members.
+  const ss = (await ssCol().doc(slug).get()).data() || {};
+  if (!ss.parent) return null;
+  const r2 = await fetch(WEAVE + "/session", { method: "POST", headers: { "content-type": "application/json", ...(visitor ? { "x-forwarded-for": visitor } : {}) },
+    body: JSON.stringify({ token, requireCommunity: ss.parent }) });
+  const v2 = await r2.json().catch(() => ({}));
+  return v2 && v2.ok ? { id: pidOf(String(v2.agentName || "").split("/@").pop()), key: false, viaParent: true } : null;
 }
 async function ssLoad(slug) { const s = await ssCol().doc(slug).get(); if (!s.exists) throw Object.assign(new Error("no such seed space"), { code: 404 }); return s; }
-const isMember = (ss, a) => !!(a && (ss.members || {})[a.id]);
+const isMember = (ss, a) => !!(a && ((ss.members || {})[a.id] || (ss.parentPeople || []).includes(a.id)));
 const shownName = (ss, id) => { const m = (ss.members || {})[id]; return m && m.show ? (m.label || id) : ""; };
 // Put an agreed seed into a seed space. A member puts it straight in; anyone else offers it and
 // any member can take it in.
@@ -1572,17 +1744,26 @@ async function spSeedTo(req, body, visitor) {
   return [200, { ok: true, status: member ? "public" : "offered" }];
 }
 async function ssList() {
-  return [200, { spaces: (await ssCol().get()).docs.map((d) => { const x = d.data(); return { slug: x.slug, name: x.name, about: x.about || "", words: x.words || [], members: Object.keys(x.members || {}).length }; }) }];
+  return [200, { spaces: (await ssCol().get()).docs.map((d) => { const x = d.data(); return { slug: x.slug, name: x.name, about: x.about || "", words: x.words || [], members: Object.keys(x.members || {}).length, parent: x.parent || "" }; }) }];
 }
 async function ssCreate(req, body) {
   const me = await whoIs(req).catch(() => null);
   if (!me) return [401, { error: "not signed in" }];
   const slug = String(body.slug || "").toLowerCase();
   if (!SLUG_RE.test(slug) || slug.length > 34) return [400, { error: "bad name" }];
-  if ((await ssCol().doc(slug).get()).exists) return [409, { error: "already exists" }];
+  const parent = SLUG_RE.test(String(body.parent || "")) ? String(body.parent) : "";
+  let parentPeople = [];
+  if (parent) { const ps = await spaceRef(parent).get(); if (!ps.exists) return [404, { error: "no such conversation space" }]; parentPeople = ((ps.data().data || {}).people || []).map((p) => p.id); }
+  const exists = await ssCol().doc(slug).get();
+  if (exists.exists) {
+    if (!parent) return [409, { error: "already exists" }];
+    // An existing seed space becomes the public face of a topic inside a conversation space.
+    await exists.ref.update({ parent, parentPeople });
+    return [200, { ok: true, slug, attached: true }];
+  }
   const words = (Array.isArray(body.words) ? body.words : []).map((w) => String(w).toLowerCase().trim()).filter(Boolean).slice(0, 20);
   await ssCol().doc(slug).set({ slug, name: String(body.name || slug).slice(0, 80), about: String(body.about || "").slice(0, 600), words, licence: LICENCE, created: Date.now(), by: me.name,
-    members: { [me.name]: { since: Date.now(), show: false, label: me.name === "jay" ? "Jay" : me.name } }, requests: [], notes: [], links: [] });
+    members: { [me.name]: { since: Date.now(), show: false, label: me.name === "jay" ? "Jay" : me.name } }, requests: [], notes: [], links: [], ...(parent ? { parent, parentPeople } : {}) });
   const com = "ss-" + slug;
   const reg = await weaveGet("/registry?id=" + encodeURIComponent(com)).catch(() => ({}));
   if (!reg.recognised) {
@@ -1596,7 +1777,7 @@ async function ssGet(req, body, visitor) {
   if (!SLUG_RE.test(slug)) return [400, { error: "bad seed space" }];
   const snap = await ssLoad(slug), ss = snap.data(), a = await ssActor(req, body, slug, visitor);
   // A Weave member of the community who is not on the roll yet (just redeemed an invitation) is added now.
-  if (a && !a.key && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
+  if (a && (a.viaParent || !a.key) && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
   const member = isMember(ss, a);
   const seeds = (await seedsCol().where("seedSpace", "==", slug).get()).docs.map((d) => d.data()).filter((x) => x.status === "public" || (member && x.status === "offered"));
   const anon = (ids) => { const named = (ids || []).map((i) => shownName(ss, i)).filter(Boolean); const rest = (ids || []).length - named.length; return named.concat(rest > 0 ? [rest === 1 ? "a member" : rest + " members"] : []); };
@@ -1769,7 +1950,7 @@ async function hlFind(slug, id) {
   const s = await spaceRef(slug).get();
   if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
   const docs = ((s.data().added || {}).docs || []);
-  const i = docs.findIndex((x) => x.id === id && (x.kind === "Highlight" || x.kind === "Presentation"));
+  const i = docs.findIndex((x) => x.id === id && (x.kind === "Highlight" || x.kind === "Presentation" || x.kind === "Bridge"));
   if (i < 0) throw Object.assign(new Error("no such highlight"), { code: 404 });
   return { s, docs, i };
 }
@@ -1780,6 +1961,7 @@ async function spConsent(req, body, visitor) {
   const { s, docs, i } = await hlFind(slug, id);
   docs[i].consent = { ...(docs[i].consent || {}), [by.id]: body.ok ? "ok" : "no" };
   await spaceRef(slug).set({ added: { ...(s.data().added || {}), docs }, updated: Date.now() }, { merge: true });
+  await bridgeSync(slug, docs[i]);
   return [200, { ok: true, consent: docs[i].consent }];
 }
 // Out of the space: to a public page (anyone in the space may do this once all have said yes),
@@ -1867,7 +2049,7 @@ async function spServe(slug, s) {
   // Whatever came from a held conversation goes with it; projects just lose the link to it.
   const hidden = new Set((d.convs || []).filter((c) => c.held).map((c) => c.id));
   const shown = (x) => keep(x) && !hidden.has(x.from);
-  const projects = (d.projects || []).filter(keep).map((p) => ({ ...p, convs: (p.convs || []).filter((c) => !hidden.has(c)) }));
+  const projects = (d.projects || []).filter(keep).filter((p) => !(d.merged || {})[p.name]).map((p) => ({ ...p, convs: (p.convs || []).filter((c) => !hidden.has(c)) }));
   // Live tasks Jay has put in a project of this space show under that project, straight from his list.
   const live = [];
   try {
@@ -2015,7 +2197,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "synth", "synthset", "bridge"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2026,7 +2208,8 @@ exports.oneButton = onRequest(
         search: () => searchAll(req, body, visitor), harvest: () => spHarvest(req, body, visitor), projseed: () => spProjectSeed(req, body, visitor), seeds: () => spSeeds(req, body, visitor),
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
-        present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor) }[sp[1]];
+        present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
+        synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
