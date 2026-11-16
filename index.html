@@ -985,6 +985,9 @@ function renderNotes(){
     for(const g of [...groups.values()].sort((a,b)=>order[a.kind]-order[b.kind]||a.label.localeCompare(b.label))){
       const gh=document.createElement('div');gh.className='nmeta';gh.style.cssText='margin:12px 0 2px;font-weight:600';gh.textContent=kindLabel[g.kind]+' . '+g.label;list.appendChild(gh);
       for(const n of g.ns){const row=noteRow(n);list.appendChild(row);
+        // Where it rests: who wrote it and, for a conversation, the moment and the words.
+        if(n.by==='claude'||(n.prov&&n.prov.quote)){const pv=document.createElement('div');pv.className='nmeta';pv.style.cssText='margin:-4px 0 6px 28px;font-style:italic';
+          pv.textContent=(n.by==='claude'?'Written by Claude on the laptop. ':'')+(n.prov&&n.prov.quote?(n.prov.at?'At '+Math.floor(n.prov.at/60)+':'+String(n.prov.at%60).padStart(2,'0')+': ':'')+'"'+n.prov.quote.slice(0,140)+'"':'');list.appendChild(pv);}
         const acts=document.createElement('div');acts.className='cat-row';acts.style.cssText='margin:0 0 10px 28px;gap:6px;align-items:center';
         const place=(patch,msg)=>{Object.assign(n,patch,{triaged:true,updated:Date.now()});save();renderNotes();showToast(msg);};
         acts.innerHTML=`<button class="tbtn" data-tr-front>Front page</button><select class="chip" data-tr-proj aria-label="Project" style="max-width:46%"><option value="">Project...</option>${live.map(p=>`<option value="${p.id}" ${n.project===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select><button class="tbtn" data-tr-drop>Drop</button>`;
@@ -2164,7 +2167,7 @@ function renderIv(){
   const aa=$('#iv-addacts'); if(aa) aa.onclick=()=>{
     const now=Date.now(); let n=0; s.added=s.added||{};
     b.querySelectorAll('[data-act]').forEach(c=>{const i=+c.dataset.act; if(!c.checked||s.added[i])return;
-      const a=s.actions[i]; notes.unshift({id:now+n,text:a.text,cat:'do',done:false,ts:now+n,subs:[],due:a.due||'',place:'',from:id}); s.added[i]=1; n++;});
+      const a=s.actions[i]; notes.unshift({id:now+n,text:a.text,cat:'do',done:false,ts:now+n,subs:[],due:a.due||'',place:'',from:id,by:'jay',prov:{conv:id,at:0,quote:a.text}}); s.added[i]=1; n++;});
     if(!n){showToast('Tick the ones you want first');return;}
     IVS[id]=s; LS.set('ob-ivs',IVS); save(); renderNotes(); showToast('Added '+n+' to your list'); renderIv();
   };

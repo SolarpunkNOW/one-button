@@ -115,6 +115,11 @@
   <p class="lede">The recordings, what each was about, and the full words.</p>
   <div id="convs"></div>
 
+  <h2>Highlights</h2>
+  <p class="lede">The parts of this space you both agree can travel: a few points and lines, each pointing at the moment it came from. The conversations themselves stay here.</p>
+  <div id="hl-make" class="hidden"><div class="row"><button id="hl-go">Make a highlight from the ticked conversations</button></div><p class="tag" style="margin:8px 0 0" id="hl-say">Tick conversations below, then tap.</p></div>
+  <div id="highlights"></div>
+
   <h2>Distilled</h2>
   <p class="lede">What came out of the conversations: key points, words worth keeping, and documents drafted from them.</p>
   <div id="distilled"></div>
@@ -234,9 +239,14 @@ $('#home-go').onclick=()=>{
 })();
 
 // Things a member put in themselves carry their name.
-const byTag=x=>x.by?' . added by '+esc(name(x.by)):'';
+const byTag=x=>x.by?(x.by==='claude'?' . written by Claude':' . added by '+esc(name(x.by))):'';
+// Provenance: the conversation, the moment and the words a thing rests on. Tapping opens the transcript.
+const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+const provLine=x=>{const p=x.prov;if(!p||!p.conv)return '';const c=conv(p.conv);
+  return `<span class="tag" style="display:block;margin-top:3px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(p.conv)}">From ${esc(c.title||'a conversation')}${p.at?' at '+mmss(p.at):''}</button>${p.quote?`: "${esc(p.quote)}"`:''}</span>`;};
+const ME=ACT&&ACT.key?'jay':D.viewer;
 $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-${p.id}">
-  <span class="tag">${esc(p.status)}${byTag(p)}${p.held?' . held, only you see this: '+esc(p.held):''}</span><h3>${esc(p.name)}</h3><div>${esc(p.about)}</div>
+  <span class="tag">${esc(p.status)}${byTag(p)}${p.held?' . held, only you see this: '+esc(p.held):''}</span><h3>${esc(p.name)}</h3><div>${esc(p.about)}</div>${provLine(p)}
   <div class="next"><span class="tag">Next step</span><br>${esc(p.next)}</div>
   ${D.tasks.some(t=>t.project===p.id)?`<div class="who" style="margin-top:10px"><span class="tag">To do in this project</span>${D.tasks.filter(t=>t.project===p.id).map(t=>`<label class="task"><input type="checkbox" ${t.done?'checked':''} disabled><span>${t.done?'<s>':''}${esc(t.text)}${t.done?'</s>':''}<span class="tag">${t.due?esc(t.due):''}</span></span></label>`).join('')}</div>`:''}
   ${p.convs.length?`<p class="tag" style="margin:10px 0 0">From: ${p.convs.map(c=>esc(conv(c).title)).join(' . ')}</p>`:''}</div>`).join('');
@@ -244,17 +254,48 @@ $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-
 const groups=[['both','Together'],[D.viewer,'You said you would'],['jay','Jay is doing']];
 $('#tasks').innerHTML=groups.map(([who,label])=>{const ts=D.tasks.filter(t=>t.who===who&&!t.project); if(!ts.length)return '';
   return `<div class="who"><span class="tag">${label}</span>${ts.map(t=>`<label class="task"><input type="checkbox" ${t.done?'checked':''} ${who==='jay'?'disabled':''}>
-    <span>${t.done?'<s>':''}${esc(t.text)}${t.done?'</s>':''}<span class="tag">${t.due?esc(t.due):''}${fromTag(t.from)}</span></span></label>`).join('')}</div>`;}).join('');
+    <span>${t.done?'<s>':''}${esc(t.text)}${t.done?'</s>':''}<span class="tag">${t.due?esc(t.due):''}${fromTag(t.from)}${byTag(t)}</span>${provLine(t)}</span></label>`).join('')}</div>`;}).join('');
 
-$('#convs').innerHTML=D.convs.map(c=>`<div class="box conv">
-  <span class="tag">${esc(c.date)}${c.mins?' . '+c.mins+' min':''}${byTag(c)}</span><h3>${esc(c.title)}</h3><div>${esc(c.summary)}</div>
+$('#convs').innerHTML=D.convs.map(c=>`<div class="box conv" id="conv-${esc(c.id)}">
+  <span class="tag">${ACT?`<input type="checkbox" data-hl="${esc(c.id)}" style="width:18px;height:18px;vertical-align:middle;margin-right:8px" aria-label="Use in a highlight">`:''}${esc(c.date)}${c.mins?' . '+c.mins+' min':''}${byTag(c)}</span><h3>${esc(c.title)}</h3><div>${esc(c.summary)}</div>
   <div class="row">${c.audio?'<button disabled title="Plays in the live page">Play recording</button>':''}${c.transcript?`<button data-tr="${c.id}">Read transcript</button>`:''}</div>${c.note?`<p class="tag" style="margin:8px 0 0">${esc(c.note)}</p>`:''}
   <div class="tr hidden" id="tr-${c.id}">${esc(c.transcript||'')}</div></div>`).join('');
 document.querySelectorAll('[data-tr]').forEach(b=>b.onclick=()=>{const t=$('#tr-'+b.dataset.tr);t.classList.toggle('hidden');
   b.textContent=t.classList.contains('hidden')?'Read transcript':'Hide transcript';});
+document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.dataset.prov,box=$('#conv-'+id),t=$('#tr-'+id);if(!box)return;
+  if(t)t.classList.remove('hidden');box.scrollIntoView({behavior:'smooth',block:'start'});});
+
+// Highlights: consent per person, then out to a public page or (host only) into another space.
+const hls=D.docs.filter(d=>d.kind==='Highlight');
+$('#hl-make').classList.toggle('hidden',!ACT);
+$('#highlights').innerHTML=hls.length?hls.map(h=>{const cs=Object.entries(h.consent||{}),all=cs.length&&cs.every(([,v])=>v==='ok'),mine=h.consent&&h.consent[ME];
+  return `<div class="box" id="hl-${esc(h.id)}"><span class="tag">${esc(h.when||'')}${byTag(h)}${h.visibility==='public'?' . public':h.visibility==='shared'?' . shared from another space':''}${h.lineage?' . from the space with '+esc((h.lineage.people||[]).join(' and ')):''}</span><h3>${esc(h.title)}</h3>
+    ${(h.points||[]).map(p=>`<div style="margin:8px 0">${esc(p.text)}${provLine(p)}</div>`).join('')}
+    ${(h.quotes||[]).length?h.quotes.map(q=>`<div class="quote">${esc(q.text)}${provLine(q)}</div>`).join(''):''}
+    ${cs.length?`<div class="row" style="align-items:center">${cs.map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join('')}</div>`:''}
+    <div class="row">${mine==='pending'&&ACT?`<button data-hlok="${esc(h.id)}">Yes, this can travel</button><button class="link" data-hlno="${esc(h.id)}">Not this one</button>`:''}
+      ${all&&ACT&&h.visibility!=='public'&&h.visibility!=='shared'?`<button data-hlpub="${esc(h.id)}">Make a public link</button>`:''}
+      ${h.link?`<a href="${esc(h.link)}" target="_blank" rel="noopener">Open the public page</a> <button class="link" data-hlcopy="${esc(h.link)}">Copy link</button>${ACT?` <button class="link" data-hlback="${esc(h.id)}">Take it back</button>`:''}`:''}
+      ${all&&ACT&&ACT.key&&h.visibility!=='shared'?`<select data-hlto="${esc(h.id)}" aria-label="Into another space"><option value="">Into another space...</option></select>`:''}</div></div>`;}).join('')
+  :'<p class="tag">No highlights yet.</p>';
+const hlCall=(route,body)=>{if(ACT.token)body.token=ACT.token();return post(route,body,headers());};
+$('#hl-go').onclick=()=>{const convs=[...document.querySelectorAll('[data-hl]:checked')].map(c=>c.dataset.hl);if(!convs.length){$('#hl-say').textContent='Tick at least one conversation below first.';return;}
+  $('#hl-go').disabled=true;$('#hl-say').textContent='Writing the highlight…';
+  hlCall('highlight',{slug:SLUG,convs}).then(()=>{$('#hl-say').textContent='Made. Each person in the space says yes before it travels.';if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});})
+    .catch(e=>$('#hl-say').textContent='That did not work: '+e.message).then(()=>{$('#hl-go').disabled=false;});};
+document.querySelectorAll('[data-hlok],[data-hlno]').forEach(b=>b.onclick=()=>{const ok=!!b.dataset.hlok;b.disabled=true;
+  hlCall('consent',{slug:SLUG,doc:b.dataset.hlok||b.dataset.hlno,ok}).then(()=>{say(ok?'Noted: yes.':'Noted: no.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
+document.querySelectorAll('[data-hlpub]').forEach(b=>b.onclick=()=>{b.disabled=true;hlCall('publish',{slug:SLUG,doc:b.dataset.hlpub,to:'public'})
+  .then(r=>{say('Public page made.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
+document.querySelectorAll('[data-hlcopy]').forEach(b=>b.onclick=()=>{try{navigator.clipboard.writeText(b.dataset.hlcopy);b.textContent='Copied';}catch(e){}});
+document.querySelectorAll('[data-hlback]').forEach(b=>b.onclick=()=>{b.disabled=true;hlCall('publish',{slug:SLUG,doc:b.dataset.hlback,to:'private'})
+  .then(()=>{say('The public page is gone. The highlight stays here.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
+const sels=document.querySelectorAll('[data-hlto]');
+if(sels.length&&ACT&&ACT.key){post('list',{},headers()).then(l=>{const opts=(l.spaces||[]).filter(s=>s.slug!==SLUG).map(s=>`<option value="${esc(s.slug)}">${esc(s.name)}</option>`).join('');
+  sels.forEach(s=>{s.insertAdjacentHTML('beforeend',opts);s.onchange=()=>{if(!s.value)return;s.disabled=true;hlCall('publish',{slug:SLUG,doc:s.dataset.hlto,to:s.value}).then(()=>say('Shared into that space.')).catch(e=>{s.disabled=false;say(e.message);});};});}).catch(()=>{});}
 
 $('#distilled').innerHTML=
-  D.docs.map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div></details>`).join('')+
+  D.docs.filter(d=>d.kind!=='Highlight').map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
   `<details class="box" open><summary>Key points</summary><ul class="pts">${D.convs.flatMap(c=>c.points).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></details>`+
   `<details class="box"><summary>Words worth keeping</summary>${D.convs.flatMap(c=>c.quotes.map(q=>`<div class="quote">${esc(q)}<br><span class="tag">${esc(c.title)}</span></div>`)).join('')}</details>`;
 

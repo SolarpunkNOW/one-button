@@ -80,14 +80,31 @@ async function transcribeBuffer(buf, type) {
   const form = new FormData();
   form.append("file", new Blob([buf], { type }), "speech." + ext);
   form.append("model", WHISPER_MODEL);
+  // Segments with their start second come back too, so a task or a quote can point at the
+  // moment in the recording it rests on (provenance).
+  form.append("response_format", "verbose_json");
   const r = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: "Bearer " + GROQ_KEY.value() },
     body: form,
   });
   const d = await r.json().catch(() => ({}));
-  return { status: r.ok ? 200 : r.status, json: r.ok ? { text: d.text || "" } : d };
+  const segments = Array.isArray(d.segments) ? d.segments.map((s) => [Math.max(0, Math.round(Number(s.start) || 0)), String(s.text || "").trim()]).filter((s) => s[1]).slice(0, 4000) : [];
+  return { status: r.ok ? 200 : r.status, json: r.ok ? { text: d.text || "", segments } : d };
 }
+
+/* Provenance. Every record that came out of a conversation says which one, the second it rests
+ * on and the words it rests on, so a page can show "from your call of 6 Nov at 14:32: '...'" and
+ * open the transcript there. anchor() finds the segment sharing the most words with a quote. */
+const WORDS = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter((w) => w.length > 2);
+function anchor(segments, quote) {
+  const q = new Set(WORDS(quote));
+  if (!q.size || !Array.isArray(segments) || !segments.length) return { at: 0, quote: String(quote || "").slice(0, 240) };
+  let best = null, score = 0;
+  for (const [at, text] of segments) { const n = WORDS(text).filter((w) => q.has(w)).length; if (n > score) { score = n; best = [at, text]; } }
+  return best && score >= Math.min(3, q.size) ? { at: best[0], quote: best[1].slice(0, 240) } : { at: 0, quote: String(quote || "").slice(0, 240) };
+}
+const mmss = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 
 async function chat(body, maxTokens = 1500) {
   const messages = Array.isArray(body.messages) ? body.messages.slice(0, 20) : [];
@@ -136,7 +153,7 @@ async function shopSource(body) {
 // Tasks live as lists, one per person; the key says whose. Open routes (a shared space read
 // with a Weave token) fall back to Jay's.
 const ID_RE_T = /^[\w-]{1,80}$/;
-const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by", "triaged"];
+const TASK_FIELDS = ["text", "cat", "done", "ts", "updated", "subs", "due", "place", "deleted", "store", "doneAt", "every", "everyBy", "hist", "aisle", "noAlarm", "alarmSeen", "remind", "snooze", "project", "from", "routine", "note", "url", "ask", "hold", "photo", "by", "triaged", "prov"];
 
 function cleanTask(t) {
   const o = { id: String(t.id) };
@@ -147,6 +164,9 @@ function cleanTask(t) {
   if (o.ask !== undefined) o.ask = ID_RE_T.test(String(o.ask)) ? String(o.ask) : "";
   if (o.hist !== undefined) o.hist = (Array.isArray(o.hist) ? o.hist : []).slice(-12).map(Number).filter((x) => x > 0);
   if (o.every !== undefined) o.every = Math.max(0, Math.min(366, Number(o.every) || 0));
+  if (o.by !== undefined) o.by = String(o.by).slice(0, 40);
+  // Provenance: the conversation, the second and the words a task rests on. Kept small.
+  if (o.prov !== undefined) o.prov = o.prov && typeof o.prov === "object" ? { conv: String(o.prov.conv || "").slice(0, 80), at: Math.max(0, Number(o.prov.at) || 0), quote: String(o.prov.quote || "").slice(0, 240) } : null;
   return o;
 }
 
@@ -311,7 +331,7 @@ async function ivProcess(req) {
     projects: arr(note.projects).map((p) => ({ name: String((p && p.name) || "").slice(0, 120), idea: String((p && p.idea) || "").slice(0, 600) })),
   };
   // Saved as done even if the note step failed: the transcript still reaches the vault.
-  await doc.set({ ...base, ...clean, transcript, status: "done", processed: Date.now() });
+  await doc.set({ ...base, ...clean, transcript, segments: tr.json.segments || [], status: "done", processed: Date.now() });
   // What Jay asked Claude to do in the recording goes to the laptop by itself.
   for (const [i, t] of arr(note.forClaude).slice(0, 5).entries()) await newAsk(String(t), id, i);
   return [200, { ...base, ...clean, status: "done" }];
@@ -680,8 +700,9 @@ async function ivAnswer(body) {
   tasks.forEach((t, i) => {
     const tid = String(now + i);
     // Tasks Claude proposes wait in the main app until Jay puts them on the front page or in a project.
+    // Written by Claude on the laptop, never by Jay: the record says so.
     batch.set(listRef().collection("tasks").doc(tid), cleanTask({
-      id: tid, text: String(t.text), cat: "do", done: false, ts: now + i, updated: now, subs: [], due: String(t.due || ""), place: "", ask: askId, hold: true,
+      id: tid, text: String(t.text), cat: "do", done: false, ts: now + i, updated: now, subs: [], due: String(t.due || ""), place: "", ask: askId, hold: true, by: "claude",
     }));
   });
   batch.update(listRef().collection("asks").doc(askId), {
@@ -792,9 +813,9 @@ function convFromInterview(iv, n) {
   const id = "c" + n, date = new Date(iv.created || Date.now()).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   return {
     conv: { id, title: iv.title || iv.name || "Conversation", date, mins: 0, held: "", summary: iv.summary || "", note: "",
-      points: iv.points || [], quotes: iv.quotes || [], transcript: iv.transcript || "", iv: iv.id },
-    tasks: (iv.actions || []).map((a) => ({ who: "jay", text: a.text, done: false, from: id, due: a.due || "", held: "" })),
-    projects: (iv.projects || []).map((p) => ({ id: "", name: p.name, status: "Idea", about: p.idea, next: "", convs: [id], held: "" })),
+      points: iv.points || [], quotes: iv.quotes || [], transcript: iv.transcript || "", segments: iv.segments || [], iv: iv.id, by: "jay" },
+    tasks: (iv.actions || []).map((a) => ({ who: "jay", text: a.text, done: false, from: id, due: a.due || "", held: "", by: "jay", prov: { conv: id, ...anchor(iv.segments, a.text) } })),
+    projects: (iv.projects || []).map((p) => ({ id: "", name: p.name, status: "Idea", about: p.idea, next: "", convs: [id], held: "", by: "jay", prov: { conv: id, ...anchor(iv.segments, p.name + " " + p.idea) } })),
   };
 }
 
@@ -973,25 +994,120 @@ async function spRecord(req, visitor) {
   const arr = (v) => (Array.isArray(v) ? v.slice(0, 40) : []);
   const whoOf = (w) => { const s = String(w || "").toLowerCase(); return s === "both" ? "both" : s === "jay" ? "jay" : by.id; };
   const date = new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const segments = tr.json.segments || [];
   const conv = { id, title: String(note.title || "Conversation").slice(0, 120), date, mins: 0, held: "", by: by.id, at,
-    summary: String(note.summary || "").slice(0, 4000), note: "", points: arr(note.points).map(String), quotes: arr(note.quotes).map(String), transcript };
-  const tasks = arr(note.actions).map((a) => ({ who: whoOf(a && a.who), text: String((a && a.text) || a).slice(0, 300), done: false, from: id, due: String((a && a.due) || ""), held: "", by: by.id, at }));
-  const projects = arr(note.projects).filter((p) => p && p.name).map((p, i) => ({ id: id + "p" + i, name: String(p.name).slice(0, 120), status: "Idea", about: String(p.idea || "").slice(0, 600), next: "", convs: [id], held: "", by: by.id, at }));
+    summary: String(note.summary || "").slice(0, 4000), note: "", points: arr(note.points).map(String), quotes: arr(note.quotes).map(String), transcript, segments };
+  const tasks = arr(note.actions).map((a) => { const text = String((a && a.text) || a).slice(0, 300); return { who: whoOf(a && a.who), text, done: false, from: id, due: String((a && a.due) || ""), held: "", by: by.id, at, prov: { conv: id, ...anchor(segments, text) } }; });
+  const projects = arr(note.projects).filter((p) => p && p.name).map((p, i) => ({ id: id + "p" + i, name: String(p.name).slice(0, 120), status: "Idea", about: String(p.idea || "").slice(0, 600), next: "", convs: [id], held: "", by: by.id, at, prov: { conv: id, ...anchor(segments, p.name + " " + p.idea) } }));
   await pushAdded(slug, { convs: [conv], tasks, projects });
   return [200, { ok: true, id, title: conv.title }];
 }
-// A member types a project, or a note or task, into the space.
+// A member types a project, or a note or task, into the space. If they say which conversation it
+// rests on, the record keeps that pointer.
 async function spAdd(req, body, visitor) {
   const slug = String(body.slug || "");
   if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
   const by = await actorFor(req, body, slug, visitor);
   const text = String(body.text || "").trim().slice(0, 600), about = String(body.about || "").trim().slice(0, 600), at = Date.now();
   if (!text) return [400, { error: "nothing to add" }];
-  const id = "m" + at.toString(36);
-  if (body.kind === "project") await pushAdded(slug, { projects: [{ id, name: text.slice(0, 120), status: "Idea", about, next: "", convs: [], held: "", by: by.id, at }] });
-  else if (body.kind === "task") await pushAdded(slug, { tasks: [{ who: body.who === "jay" ? "jay" : body.who === "both" ? "both" : by.id, text, done: false, from: "", due: String(body.due || "").slice(0, 40), held: "", by: by.id, at }] });
-  else await pushAdded(slug, { docs: [{ title: text.split(/\s+/).slice(0, 8).join(" "), kind: "Note", when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }), body: text, from: "", by: by.id, at }] });
+  const id = "m" + at.toString(36), conv = /^[\w-]{1,40}$/.test(String(body.conv || "")) ? String(body.conv) : "";
+  const prov = conv ? { conv, at: 0, quote: "" } : null;
+  if (body.kind === "project") await pushAdded(slug, { projects: [{ id, name: text.slice(0, 120), status: "Idea", about, next: "", convs: conv ? [conv] : [], held: "", by: by.id, at, ...(prov ? { prov } : {}) }] });
+  else if (body.kind === "task") await pushAdded(slug, { tasks: [{ who: body.who === "jay" ? "jay" : body.who === "both" ? "both" : by.id, text, done: false, from: conv, due: String(body.due || "").slice(0, 40), held: "", by: by.id, at, ...(prov ? { prov } : {}) }] });
+  else await pushAdded(slug, { docs: [{ id, title: text.split(/\s+/).slice(0, 8).join(" "), kind: "Note", when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }), body: text, from: conv, by: by.id, at, ...(prov ? { prov } : {}) }] });
   return [200, { ok: true, id }];
+}
+
+/* Highlights: the public face of a private space. A member picks conversations; the server
+ * writes a short highlight (points and a few quotes, each pointing at its moment in the
+ * recording, never the transcript). It stays inside the space until every person in it has
+ * said yes; then it can go to another space, or to a public page. */
+const HL_SYS = (names) => `You write a highlight of one or more conversations between ${names}, for people who were not in them. Reply with JSON only:
+{"title": "at most 8 words",
+ "points": [{"text": "one plain sentence someone outside could understand", "quote": "the short word-for-word line from the transcript it rests on"}],
+ "quotes": ["up to 3 more short word-for-word lines worth keeping"]}
+3 to 6 points. Nothing private, nothing about money, health or third parties by name unless it is plainly the point. Warm, exact, no em dashes.`;
+const hlRef = () => admin.firestore().collection("onebutton_highlights");
+async function spHighlight(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await spaceRef(slug).get();
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), ids = (Array.isArray(body.convs) ? body.convs : []).map(String).slice(0, 6);
+  const convs = d.convs.filter((c) => ids.includes(c.id) && !c.held);
+  if (!convs.length) return [400, { error: "pick a conversation first" }];
+  const names = (d.people || []).map((p) => p.name).join(" and ");
+  const text = convs.map((c) => `## ${c.title} (${c.date})\n${c.transcript || c.summary || ""}`).join("\n\n").slice(0, 60000);
+  const out = await chat({ messages: [{ role: "system", content: HL_SYS(names) }, { role: "user", content: text }] }, 2500);
+  let hl = null;
+  try { hl = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!hl) return [502, { error: "could not write the highlight" }];
+  const at = Date.now(), id = "h" + at.toString(36);
+  const segOf = (quote) => { for (const c of convs) { const a = anchor(c.segments || [], quote); if (a.at || !c.segments || !c.segments.length) return { conv: c.id, ...a }; } return { conv: convs[0].id, at: 0, quote: String(quote || "").slice(0, 240) }; };
+  const points = (Array.isArray(hl.points) ? hl.points : []).slice(0, 6).map((p) => ({ text: String((p && p.text) || p).slice(0, 300), prov: segOf(p && p.quote) }));
+  const quotes = (Array.isArray(hl.quotes) ? hl.quotes : []).slice(0, 3).map((q) => ({ text: String(q).slice(0, 240), prov: segOf(q) }));
+  // Everyone in the space has a say; the maker's yes is implied.
+  const consent = {}; for (const p of d.people || []) consent[p.id] = p.id === by.id ? "ok" : "pending";
+  const doc = { id, kind: "Highlight", title: String(hl.title || "Highlight").slice(0, 120), when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+    body: points.map((p) => p.text).join("\n"), points, quotes, from: convs[0].id, convs: convs.map((c) => c.id), by: by.id, at, consent, visibility: "space", origin: slug };
+  await pushAdded(slug, { docs: [doc] });
+  return [200, { ok: true, id }];
+}
+async function hlFind(slug, id) {
+  const s = await spaceRef(slug).get();
+  if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
+  const docs = ((s.data().added || {}).docs || []);
+  const i = docs.findIndex((x) => x.id === id && x.kind === "Highlight");
+  if (i < 0) throw Object.assign(new Error("no such highlight"), { code: 404 });
+  return { s, docs, i };
+}
+async function spConsent(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.doc || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const { s, docs, i } = await hlFind(slug, id);
+  docs[i].consent = { ...(docs[i].consent || {}), [by.id]: body.ok ? "ok" : "no" };
+  await spaceRef(slug).set({ added: { ...(s.data().added || {}), docs }, updated: Date.now() }, { merge: true });
+  return [200, { ok: true, consent: docs[i].consent }];
+}
+// Out of the space: to a public page (anyone in the space may do this once all have said yes),
+// or into another space the host holds (host only). Lineage points back at the origin.
+async function spPublish(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.doc || ""), to = String(body.to || "public");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const { s, docs, i } = await hlFind(slug, id);
+  const doc = docs[i];
+  // Taking it back: the public page goes, the highlight stays in the space.
+  if (to === "private") {
+    await hlRef().doc(id).delete().catch(() => {});
+    docs[i].visibility = "space"; delete docs[i].link;
+    await spaceRef(slug).set({ added: { ...(s.data().added || {}), docs }, updated: Date.now() }, { merge: true });
+    return [200, { ok: true }];
+  }
+  const waiting = Object.entries(doc.consent || {}).filter(([, v]) => v !== "ok").map(([k]) => k);
+  if (waiting.length) return [409, { error: "waiting for " + waiting.join(", ") + " to say yes", waiting }];
+  const people = ((s.data().data || {}).people || []).map((p) => p.name);
+  if (to === "public") {
+    await hlRef().doc(id).set({ id, title: doc.title, when: doc.when, points: doc.points, quotes: doc.quotes, people, space: slug, publishedBy: by.id, publishedAt: Date.now(), convTitles: (withAdded(s).convs || []).filter((c) => (doc.convs || []).includes(c.id)).map((c) => ({ title: c.title, date: c.date })) });
+    docs[i].visibility = "public"; docs[i].link = OB_SITE + "/h/?id=" + id;
+    await spaceRef(slug).set({ added: { ...(s.data().added || {}), docs }, updated: Date.now() }, { merge: true });
+    return [200, { ok: true, link: docs[i].link }];
+  }
+  if (!SLUG_RE.test(to)) return [400, { error: "bad space" }];
+  const me = await whoIs(req).catch(() => null);
+  if (!me) return [403, { error: "only the host shares into another space" }];
+  const target = await spaceRef(to).get();
+  if (!target.exists) return [404, { error: "no such space" }];
+  await pushAdded(to, { docs: [{ ...doc, id: id + "-" + to, consent: {}, visibility: "shared", lineage: { space: slug, doc: id, people }, by: me.name, at: Date.now() }] });
+  return [200, { ok: true }];
+}
+async function hlGet(body) {
+  const id = String(body.id || "");
+  if (!/^h[a-z0-9]{1,20}$/.test(id)) return [400, { error: "bad id" }];
+  const s = await hlRef().doc(id).get();
+  return s.exists ? [200, s.data()] : [404, { error: "no such highlight" }];
 }
 
 async function spServe(slug, s) {
@@ -1135,12 +1251,18 @@ exports.oneButton = onRequest(
       try { send(await spData(body, visitor)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && (sp[1] === "record" || sp[1] === "add")) {
+    if (sp && ["record", "add", "highlight", "consent", "publish"].includes(sp[1])) {
       // A member puts something in: their Weave sign-in (or the host's key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
-      if (!(await checkRateLimit(sp[1] === "record" ? 60 : 200, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
-      try { send(sp[1] === "record" ? await spRecord(req, visitor) : await spAdd(req, body, visitor)); }
+      if (!(await checkRateLimit(sp[1] === "record" || sp[1] === "highlight" ? 60 : 200, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
+      const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor) }[sp[1]];
+      try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
+    if (req.path.endsWith("/hl/get")) {
+      // A published highlight: open to anyone with the link.
+      try { send(await hlGet(body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
     const me = await whoIs(req).catch(() => null);

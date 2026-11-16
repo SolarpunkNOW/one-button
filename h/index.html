@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#FFFFFF" />
+<title>Highlight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Mycelial Minimalism, same as One Button: white paper, ink, spark accent, hairlines, square corners. */
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:640px;margin:0 auto;padding:0 16px 64px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
+  .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 30px/1.1 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:12px 0 6px}
+  .lede{color:var(--muted);margin:0 0 20px;font-size:15px}
+  .pt{border-top:1px solid var(--line);padding:14px 0}
+  .pt .q{font-size:15px;border-left:2px solid var(--spark);padding:2px 0 2px 12px;margin-top:8px;font-style:italic;color:var(--muted)}
+  .quote{font-size:16px;border-left:2px solid var(--line);padding:2px 0 2px 12px;margin:12px 0;font-style:italic}
+  .foot{margin-top:32px;color:var(--muted);font-size:14px}
+  a{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag">Highlight</span></div>
+  <div id="body"><p class="lede">Opening.</p></div>
+</div>
+<script>
+/* A highlight someone chose to make public from a private space: a few points and a few lines,
+   each with the conversation and the moment it rests on. The transcript itself never comes here. */
+const $=s=>document.querySelector(s);
+const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
+const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+const id=new URLSearchParams(location.search).get('id')||'';
+fetch(API+'/api/hl/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))))
+  .then(h=>{
+    document.title=h.title||'Highlight';
+    const conv=(h.convTitles||[]);
+    const where=p=>{const c=conv[0]||{};return (c.title?'From "'+esc(c.title)+'"'+(c.date?', '+esc(c.date):''):'From a conversation')+(p&&p.at?' at '+mmss(p.at):'');};
+    $('#body').innerHTML=`<h1>${esc(h.title)}</h1>
+      <p class="lede">From ${conv.length===1?'a conversation':conv.length+' conversations'} between ${esc((h.people||[]).join(' and '))}${conv[0]&&conv[0].date?', '+esc(conv[0].date):''}. Shared with everyone's agreement.</p>
+      ${(h.points||[]).map(p=>`<div class="pt">${esc(p.text)}${p.prov&&p.prov.quote?`<div class="q">${where(p.prov)}: "${esc(p.prov.quote)}"</div>`:''}</div>`).join('')}
+      ${(h.quotes||[]).length?`<div class="tag" style="margin-top:28px">Words worth keeping</div>${h.quotes.map(q=>`<div class="quote">${esc(q.text)}<br><span class="tag">${where(q.prov)}</span></div>`).join('')}`:''}
+      <p class="foot">Made with One Button. The full conversation stays private with the people who had it.</p>`;})
+  .catch(e=>{$('#body').innerHTML='<h1>Not here</h1><p class="lede">This highlight is not public, or the link is wrong. '+esc(e.message)+'</p>';});
+</script>
+</body>
+</html>
