@@ -893,13 +893,15 @@ async function spList() {
   const docs = (await listRef().collection("spaces").get()).docs.map((d) => d.data());
   // fresh = things a member put in since the host last opened the space; seen = when each
   // member last opened it, so the host can tell a read space from a silent one.
+  // Counts include what was added to a space after the laptop built it (imports, members' additions).
+  const all = (s, k) => [...((s.data && s.data[k]) || []), ...((s.added && s.added[k]) || [])];
   const mine = docs.map((s) => ({ slug: s.slug, person: s.person, name: s.name, updated: s.updated, joined: !!s.joined,
-    convs: ((s.data && s.data.convs) || []).length, tasks: ((s.data && s.data.tasks) || []).length,
-    ivs: ((s.data && s.data.convs) || []).map((c) => c.iv).filter(Boolean),
+    convs: all(s, "convs").length, tasks: all(s, "tasks").length,
+    ivs: all(s, "convs").map((c) => c.iv).filter(Boolean),
     fresh: addedList(s).filter((x) => (x.at || 0) > (s.hostSeen || 0)).length, lastAdded: s.lastAdded || 0, seen: s.seen || {} }));
   // And the spaces others host with this person in them: the same conversations, projects and
   // tasks both people generated, seen from the member's side.
-  const withMe = (await spacesForMe()).map(({ host, snap }) => { const s = snap.data(), d = s.data || {};
+  const withMe = (await spacesForMe()).map(({ host, snap }) => { const s = snap.data(), d = withAdded(snap);
     return { slug: s.slug, person: host, name: host[0].toUpperCase() + host.slice(1), host, updated: s.updated, joined: true,
       convs: (d.convs || []).filter((c) => !c.held).length, tasks: (d.tasks || []).filter((t) => !t.held).length }; });
   return { spaces: mine, withMe };
