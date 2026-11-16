@@ -818,7 +818,21 @@ async function migrateSpace(slug, s) {
   await spaceRef(slug).set({ data: d, added: a }, { merge: true });
   return spaceRef(slug).get();
 }
-async function convHeavy(slug, id) { const h = await convRef(slug, id).get(); return h.exists ? h.data() : { transcript: "", segments: [] }; }
+// The words and timings of a space conversation. Timings missing here fall back to the phone
+// recording's own, when the conversation is bound to one.
+async function convHeavy(slug, id) {
+  const h = await convRef(slug, id).get(), d = h.exists ? h.data() : { transcript: "", segments: [] };
+  if (!d.iv && (!d.segments || !d.segments.length)) {
+    const s = (await spaceRef(slug).get()).data() || {};
+    const c = [...((s.data || {}).convs || []), ...((s.added || {}).convs || [])].find((x) => x && x.id === id);
+    if (c && c.iv) d.iv = c.iv;
+  }
+  if ((!d.segments || !d.segments.length) && d.iv) {
+    const iv = await listRef().collection("interviews").doc(String(d.iv)).get();
+    if (iv.exists && Array.isArray(iv.data().segments) && iv.data().segments.length) d.segments = iv.data().segments;
+  }
+  return d;
+}
 
 async function weaveAdmin(action, body) {
   const r = await fetch(WEAVE + "/admin", {
