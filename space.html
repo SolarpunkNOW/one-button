@@ -60,6 +60,7 @@
   .mail{background:var(--surface);padding:16px;font-size:15px}
   .mail .tag{margin-bottom:8px}
   .hidden{display:none}
+  mark{background:var(--spark);color:#1A1A1A;padding:0 2px}
   button.link::before,a.link::before,.link::before{content:none!important;display:none!important}
   .ln{padding:4px 6px;margin:0 -6px;cursor:pointer;border-left:3px solid transparent}
   .ln:hover{background:var(--paper)}
@@ -73,7 +74,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag">Shared space</span></div>
+  <div class="bar"><span><button class="link" id="back" style="margin-right:12px;font-size:15px">&larr; Back</button><span class="mark">One <b>Button</b></span></span><span class="tag">Shared space</span></div>
   <div class="preview hidden" id="preview">Preview with made-up content. This is what someone sees after tapping the link you shared.</div>
   <div class="box hidden" id="gate"><h2 id="gate-t" style="margin-top:0">Opening your space</h2><p id="gate-x" style="margin:0">One moment.</p></div>
 
@@ -138,6 +139,11 @@
   <p class="lede">A question about anything said here. The answer points at the moments it rests on. Passages marked private are never used.</p>
   <div class="row"><input id="ask-q" style="flex:1;min-width:180px;font:16px Inter,sans-serif;padding:10px;border:1px solid var(--ink)" placeholder="What did we say about pensions?" aria-label="Ask this space"><button id="ask-go">Ask</button></div>
   <div id="ask-out"></div>
+
+  <h2>People mentioned</h2>
+  <p class="lede">Every line that names someone in your network. Sensitive ones come first. <b>Fine</b> stops showing it. <b>Keep private</b> keeps it in this space and out of anything made from it. <b>Remove</b> takes the words out of the transcript for good.</p>
+  <div class="row"><button id="mn-go">Find mentions</button><span class="tag" id="mn-say"></span></div>
+  <div id="mentions"></div>
 
   <h2>Marked passages</h2>
   <p class="lede">Open a transcript, tap the first line and the last line of a stretch, then mark it. <b>Share</b> asks everyone in this space for a yes before it can go anywhere. <b>Keep private</b> needs nobody's agreement and keeps those words out of every summary, seed, highlight, presentation and answer. A shared passage can become a soundbite to listen to.</p>
@@ -260,7 +266,10 @@ document.querySelectorAll('#how button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#how button').forEach(x=>x.classList.toggle('on',x===b));
   $('#how-note').textContent={email:'One email a day at most, only when something changed.',page:'Nothing is sent. What is new shows here when you visit.',pause:'Paused. Nothing is sent until you turn it back on.'}[b.dataset.how];
 });
-$('#leave').onclick=e=>{e.target.replaceWith('(In the live page this removes you from the space and stops all updates.)');};
+// Leaving: never offered to the host; for anyone else it asks first, and does nothing yet beyond
+// saying who to ask (leaving for real is not built), so nobody can lose a space by a stray tap.
+{const lv=$('#leave'),host=!!(ACT&&ACT.key&&!D.asMember);lv.hidden=host;if(lv.previousSibling&&host)lv.previousSibling.textContent=lv.previousSibling.textContent.replace(/ \.\s*$/,'');
+  lv.onclick=()=>{if(lv.dataset.sure!=='1'){lv.dataset.sure='1';lv.textContent='Tap again to ask to leave';return;}lv.dataset.sure='';lv.textContent='Leave this space';say('Nothing has changed. To leave, tell Jay and he takes you off; the space stays as it is until then.');};}
 // The whole space as one file to keep: conversations with their words, tasks, projects, highlights.
 $('#export').onclick=e=>{if(!ACT){e.target.replaceWith('(Available once you are signed in.)');return;}e.target.textContent='Preparing…';
   actCall('export',{slug:SLUG}).then(x=>{const bl=new Blob([JSON.stringify(x,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='space-'+SLUG+'-'+new Date().toISOString().slice(0,10)+'.json';a.click();e.target.textContent='Download this space';})
@@ -401,6 +410,23 @@ const doFind=()=>{const q=$('#find-q').value.trim();if(!q)return;$('#find-out').
 $('#find-go').onclick=doFind;$('#find-q').onkeydown=e=>{if(e.key==='Enter')doFind();};
 
 window.__tpIds=D.topicIds||null;
+// Back: inside the app, close this sheet; in a subspace, back to the whole space; otherwise the browser's back.
+$('#back').onclick=()=>{const tp=new URLSearchParams(location.search).get('topic');
+  if(tp){location.href=location.pathname+'?s='+encodeURIComponent(SLUG);return;}
+  try{if(window.parent!==window&&window.parent.closeSheets){window.parent.closeSheets();return;}}catch(e){}
+  if(history.length>1)history.back();else location.href='/';};
+// People mentioned: found on request (it reads every conversation), decided line by line.
+const drawMentions=r=>{const hits=(r.hits||[]).filter(x=>!D.topicIds||D.topicIds.has(x.conv));
+  $('#mn-say').textContent=hits.length?hits.length+' line'+(hits.length===1?'':'s')+' name someone'+(hits.filter(x=>x.sensitive).length?', '+hits.filter(x=>x.sensitive).length+' look sensitive':''):'No mentions left to look at.';
+  const hl=(t,n)=>esc(t).replace(new RegExp('\\b('+n.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')\\b','gi'),'<mark>$1</mark>');
+  $('#mentions').innerHTML=hits.map(x=>`<div class="box" ${x.sensitive?'style="border-color:var(--ink)"':''}><span class="tag">${x.sensitive?'looks sensitive . ':''}${esc(x.name)} . ${esc(x.convTitle||'')}${x.at>=0?' . <button class="link" data-prov="'+esc(x.conv)+'" data-at="'+Math.round(x.at)+'">'+mmss(Math.round(x.at))+'</button>':''}</span>
+    <div style="margin-top:6px">${hl(x.text,x.name)}</div>
+    <div class="row"><button class="link" data-mn="${esc(x.id)}|fine">Fine</button><button data-mn="${esc(x.id)}|private">Keep private</button><button data-mn="${esc(x.id)}|remove">Remove</button></div></div>`).join('');
+  wireProv();
+  document.querySelectorAll('[data-mn]').forEach(b=>b.onclick=()=>{const [id,act]=b.dataset.mn.split('|');const hit=hits.find(x=>x.id===id);
+    if(act==='remove'&&b.dataset.sure!=='1'){b.dataset.sure='1';b.textContent='Tap again to remove for good';return;}
+    b.disabled=true;actCall('mentionset',{slug:SLUG,id,act,text:hit?hit.text:''}).then(()=>{b.closest('.box').remove();say(act==='remove'?'Removed from the transcript.':act==='private'?'Kept private.':'Fine, it will not show again.');}).catch(e=>{b.disabled=false;say(e.message);});});};
+$('#mn-go').onclick=()=>{$('#mn-go').disabled=true;$('#mn-say').textContent='Reading every conversation for names…';actCall('mentions',{slug:SLUG}).then(drawMentions).catch(e=>{$('#mn-say').textContent=e.message;}).then(()=>{$('#mn-go').disabled=false;});};
 // Seeds: harvested here, agreed here, then out to a seed space.
 const SEEDLBL={private:'waiting for everyone\'s yes',agreed:'agreed, ready for a seed space',offered:'offered to a seed space',public:'public in a seed space'};
 function loadSeeds(){if(!ACT)return;actCall('seeds',{slug:SLUG}).then(r=>Promise.all([r,post('../ss/list',{}).catch(()=>({spaces:[]}))])).then(([r,l])=>{

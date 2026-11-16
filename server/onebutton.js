@@ -1645,6 +1645,85 @@ async function bridgeSync(slug, doc) {
   });
 }
 
+/* ---------- People mentioned ----------
+ * Every line in a space's conversations that names someone in the network (people Jay has spaces
+ * with, people tagged in or talked about in his recordings), so the people in the space can decide:
+ * fine, keep private (a private mark: it never leaves the space or feeds anything made from it), or
+ * remove (the words are taken out of the transcript for good). Lines that read as sensitive (a
+ * judgement of someone, money, health, family, conflict) are flagged first. */
+async function networkNames() {
+  const names = new Map();
+  const add = (n) => { const s = String(n || "").trim(); if (s.length >= 3 && /^[A-Z]/.test(s) && s.toLowerCase() !== "jay") names.set(s.toLowerCase(), s); };
+  for (const s of (await listRef().collection("spaces").get()).docs) { const x = s.data(); add(x.name); for (const p of (((x.data || {}).people) || [])) add(p.name); }
+  for (const d of (await listRef().collection("interviews").get()).docs) { const iv = d.data(); for (const p of iv.people || []) add(p); for (const p of iv.about || []) add(String(p).split(" ")[0]); }
+  const spacePeople = new Set((await listRef().collection("spaces").get()).docs.map((s) => String(s.data().name || "").toLowerCase()));
+  const COMMON = new Set(["day", "guy", "may", "will", "mark", "hope", "grace", "faith", "bill", "rose", "sky", "summer", "dawn", "june", "april", "august", "art", "max", "page", "rich", "frank", "pat", "sunny", "river", "forest", "angel", "star", "storm", "ray", "joe", "don", "ben", "sam", "tom", "dan", "nick", "jack", "will", "chase", "hunter", "wood", "stone", "earth", "love", "peace", "trust", "may", "noah", "eve"]);
+  return [...names.values()].filter((n) => !COMMON.has(n.toLowerCase()) || spacePeople.has(n.toLowerCase()));
+}
+async function spMentions(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), names = await networkNames(), a = s.data().added || {};
+  const okd = new Set(a.mentionsOk || []), marks = a.marks || [];
+  const re = new RegExp("\\b(" + names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b");
+  const hits = [];
+  for (const c of (d.convs || []).filter((x) => !x.held || by.id === "jay")) {
+    const h = await convHeavy(slug, c.id);
+    const lines = h.segments && h.segments.length ? h.segments : String(h.transcript || "").split(/(?<=[.!?])\s+/).map((x, i) => [-(i + 1), x]);
+    for (const [at, text] of lines) {
+      const m = String(text).match(re);
+      if (!m) continue;
+      const id = c.id + "@" + at;
+      if (okd.has(id) || /^\[removed/.test(String(text))) continue;
+      if (at >= 0 && marks.some((k) => k.kind === "private" && k.conv === c.id && at >= k.from - 0.5 && at <= k.to + 0.5)) continue;
+      hits.push({ id, conv: c.id, convTitle: c.title, at, text: String(text).slice(0, 300), name: m[1] });
+      if (hits.length >= 300) break;
+    }
+  }
+  // Which of these read as sensitive: one call, numbered lines in, numbers out.
+  if (hits.length && body.check !== false) {
+    const list = hits.slice(0, 200).map((x, i) => `${i}: ${x.text}`).join("\n");
+    const out = await chat({ messages: [{ role: "system", content: 'Each numbered line names a real person. Reply with JSON only: {"sensitive": [numbers]} listing lines that are sensitive to share with others: a judgement or opinion about that person or their character, gossip, money or income, health, family, relationships, conflict, or anything said in confidence. Neutral mentions (who said what, plans, introductions, ideas) are not sensitive.' }, { role: "user", content: list }] }, 800);
+    let got = null;
+    try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+    for (const i of (got && Array.isArray(got.sensitive) ? got.sensitive : [])) if (hits[Number(i)]) hits[Number(i)].sensitive = true;
+  }
+  hits.sort((x, y) => (y.sensitive ? 1 : 0) - (x.sensitive ? 1 : 0));
+  return [200, { names: names.length, hits }];
+}
+// fine: stop showing it. private: a private mark on that line. remove: take the words out of the transcript.
+async function spMentionSet(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || ""), act = String(body.act || "");
+  const m = id.match(/^([\w-]{1,40})@(-?\d+(?:\.\d+)?)$/);
+  if (!SLUG_RE.test(slug) || !m) return [400, { error: "bad request" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const conv = m[1], at = Number(m[2]);
+  if (act === "fine") {
+    await admin.firestore().runTransaction(async (t) => { const x = await t.get(spaceRef(slug)); const a = { ...ADDED, ...(x.data().added || {}) }; a.mentionsOk = [...new Set([...(a.mentionsOk || []), id])].slice(-5000); t.set(spaceRef(slug), { added: a }, { merge: true }); });
+    return [200, { ok: true }];
+  }
+  const h = await convHeavy(slug, conv);
+  const segs = h.segments || [];
+  if (act === "private") {
+    if (at < 0) return spMark(req, { ...body, conv, from: 0, to: 0, text: String(body.text || ""), kind: "private" }, visitor);
+    const i = segs.findIndex(([s]) => s === at), to = (segs[i + 1] || [at + 6])[0];
+    return spMark(req, { ...body, conv, from: at, to, text: (segs[i] || [0, body.text || ""])[1], kind: "private" }, visitor);
+  }
+  if (act === "remove") {
+    const line = at >= 0 ? (segs.find(([s]) => s === at) || [0, ""])[1] : String(body.text || "");
+    if (!line) return [404, { error: "that line is not there any more" }];
+    const note = "[removed by " + (by.id === "jay" ? "Jay" : by.id) + "]";
+    const newSegs = segs.map(([s, x]) => (s === at ? [s, note] : [s, x]));
+    const tx = String(h.transcript || "").split(line).join(note);
+    await convRef(slug, conv).set({ segments: newSegs, transcript: tx, removed: admin.firestore.FieldValue.arrayUnion({ at, by: by.id, when: Date.now() }) }, { merge: true });
+    return [200, { ok: true }];
+  }
+  return [400, { error: "unknown action" }];
+}
+
 /* ---------- Seeds and seed spaces ----------
  * A seed is an idea, project or question harvested from a conversation, pointing at the moment
  * it came from. It belongs to the people who were in that conversation: it stays private until
@@ -2240,7 +2319,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "synth", "synthset", "bridge"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2252,7 +2331,8 @@ exports.oneButton = onRequest(
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
         present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
-        synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor) }[sp[1]];
+        synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor),
+        mentions: () => spMentions(req, body, visitor), mentionset: () => spMentionSet(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
