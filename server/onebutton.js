@@ -911,8 +911,13 @@ async function spGet(body) {
   // The host's own view carries what members added, and notes that the host has now seen it.
   if (s.exists) { spaceRef(slug).set({ hostSeen: Date.now() }, { merge: true }).catch(() => {}); return [200, withAdded(await migrateSpace(slug, s))]; }
   // Not mine: a space someone else opened for me shows the member's view, held parts removed.
-  const shared = await spaceForMe(slug);
-  return shared ? spServe(slug, shared) : [404, { error: "no such space" }];
+  // A member opening a space someone else hosts, with their own One Button key: served from the
+  // host's list (where the space lives), as the member's view, held parts removed.
+  const hit = (await spacesForMe()).find((x) => x.snap.id === slug);
+  if (!hit) return [404, { error: "no such space" }];
+  const out = await PERSON.run({ name: hit.host, list: hit.host, trusted: true, admin: hit.host === "jay" }, () => spServe(slug, hit.snap));
+  if (Array.isArray(out) && out[0] === 200) out[1].asMember = true;
+  return out;
 }
 // Spaces other people host that name this person. Hosts are the lists that have spaces; today
 // that is Jay's, so the lookup stays small and needs no index.

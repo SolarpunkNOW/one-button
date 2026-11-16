@@ -316,7 +316,8 @@ const byTag=x=>x.by?(x.by==='claude'?' . written by Claude':' . added by '+esc(n
 const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
 const provLine=x=>{const p=x.prov;if(!p||!p.conv)return '';const c=conv(p.conv);
   return `<span class="tag" style="display:block;margin-top:3px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(p.conv)}" data-at="${+p.at||0}">From ${esc(c.title||'a conversation')}${p.at?' at '+mmss(p.at):''}</button>${p.quote?`: "${esc(p.quote)}"`:''}</span>`;};
-const ME=ACT&&ACT.key?'jay':D.viewer;
+// Who is looking: the host with the app key, or the person the space is with (their own key or Weave sign-in).
+const ME=D.asMember||!(ACT&&ACT.key)?D.viewer:'jay';
 $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-${p.id}">
   <span class="tag">${esc(p.status)}${byTag(p)}${p.held?' . held, only you see this: '+esc(p.held):''}</span><h3>${esc(p.name)}</h3><div>${esc(p.about)}</div>${provLine(p)}
   <div class="next"><span class="tag">Next step</span><br>${esc(p.next)}</div>
@@ -727,7 +728,8 @@ function weave(){
 
 if(window.SPACE) show(window.SPACE);
 else if(!SLUG) show({...DEMO,banner:'Preview with made-up content. This is what someone sees after tapping the link you shared.'});
-else if(appKey()&&!INVITE){gate('Opening','Loading your view of this space.');post('get',{slug:SLUG},{'x-ob-key':appKey()}).then(D=>{ACT={key:appKey()};show(D,()=>post('get',{slug:SLUG},{'x-ob-key':appKey()}));}).catch(weave);}
+else if(appKey()){gate('Opening','Loading your view of this space.');post('get',{slug:SLUG},{'x-ob-key':appKey()}).then(D=>{stripInvite();ACT={key:appKey()};show(D,()=>post('get',{slug:SLUG},{'x-ob-key':appKey()}));}).catch(weave);}
+// Anyone with a One Button key opens their spaces with it; the Weave sign-in is for people without the app.
 else weave();
 </script>
 </body>
