@@ -60,6 +60,7 @@
   .mail{background:var(--surface);padding:16px;font-size:15px}
   .mail .tag{margin-bottom:8px}
   .hidden{display:none}
+  button.link::before,a.link::before,.link::before{content:none!important;display:none!important}
   .ln{padding:4px 6px;margin:0 -6px;cursor:pointer;border-left:3px solid transparent}
   .ln:hover{background:var(--paper)}
   .ln.sel{background:var(--spark);color:#1A1A1A}
@@ -242,7 +243,7 @@ const name=id=>id==='both'?'Both of you':id===D.viewer?'You':(D.people.find(p=>p
 const conv=id=>D.convs.find(c=>c.id===id)||{title:'',date:''};
 const fromTag=id=>id?' . from '+esc(conv(id).title):'';
 
-$('#title').textContent=D.people.map(p=>p.id===D.viewer?'You':p.name).join(' and ');
+{const me=D.asMember||!(ACT&&ACT.key)?D.viewer:'jay';$('#title').textContent=D.people.map(p=>p.id===me?'You':p.name).join(' and ');}
 const pl=(n,w)=>n+' '+w+(n===1?'':'s');
 $('#lede').textContent=`${pl(D.convs.length,'conversation')}, ${pl(D.projects.length,'project')} growing from ${D.convs.length===1?'it':'them'}.`;
 $('#since').textContent=D.since;

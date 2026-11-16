@@ -1806,7 +1806,7 @@ async function ssGet(req, body, visitor) {
   if (!SLUG_RE.test(slug)) return [400, { error: "bad seed space" }];
   const snap = await ssLoad(slug), ss = snap.data(), a = await ssActor(req, body, slug, visitor);
   // A Weave member of the community who is not on the roll yet (just redeemed an invitation) is added now.
-  if (a && (a.viaParent || !a.key) && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
+  if (a && (a.viaParent || !a.key || (ss.parentPeople || []).includes(a.id)) && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
   const member = isMember(ss, a);
   const seeds = (await seedsCol().where("seedSpace", "==", slug).get()).docs.map((d) => d.data()).filter((x) => x.status === "public" || (member && x.status === "offered"));
   const anon = (ids) => { const named = (ids || []).map((i) => shownName(ss, i)).filter(Boolean); const rest = (ids || []).length - named.length; return named.concat(rest > 0 ? [rest === 1 ? "a member" : rest + " members"] : []); };
@@ -1821,6 +1821,11 @@ async function ssGet(req, body, visitor) {
   }
   return [200, {
     mine,
+    // People in the conversation space this grew from who have not opened it yet: they are in already,
+    // they only need the link.
+    waitingFromParent: member && ss.parent ? await (async () => { const ps = await spaceRef(ss.parent).get(); const people = (((ps.data() || {}).data || {}).people || []);
+      return people.filter((p) => !(ss.members || {})[p.id] && (ss.parentPeople || []).includes(p.id)).map((p) => ({ id: p.id, name: p.name })); })() : [],
+    parent: member ? ss.parent || "" : "",
     slug, name: ss.name, about: ss.about, licence: ss.licence || LICENCE, words: ss.words || [], me: member ? { id: a.id, show: !!(ss.members[a.id] || {}).show } : null,
     members: Object.keys(ss.members || {}).length, named: Object.entries(ss.members || {}).filter(([, m]) => m.show).map(([, m]) => m.label),
     seeds: seeds.map((x) => ({ id: x.id, kind: x.kind, title: x.title, about: x.about, quote: x.prov && x.prov.quote, at: x.prov && x.prov.at, convTitle: x.convTitle, from: anon(x.people), status: x.status, when: new Date(x.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) })),
@@ -1878,6 +1883,15 @@ async function ssAct(req, body, visitor, action) {
     const title = String(body.title || "").trim().slice(0, 140), summary = String(body.summary || "").trim().slice(0, 800);
     if (!title) return [400, { error: "a title, please" }];
     await snap.ref.update({ links: [...(ss.links || []), { id: "l" + now.toString(36), title, summary, iv: String(body.iv || "").slice(0, 80), by: a.id, at: now }].slice(-500) });
+    return [200, { ok: true }];
+  }
+  if (action === "unroll") {
+    // Host only: take a name off the roll (for example one added by a test, not by the person).
+    if (a.id !== "jay" || !a.key) return [403, { error: "host only" }];
+    const who = pidOf(body.who || ""), members = { ...(ss.members || {}) };
+    if (!who || who === "jay" || !members[who]) return [404, { error: "not on the roll" }];
+    delete members[who];
+    await snap.ref.update({ members });
     return [200, { ok: true }];
   }
   if (action === "optin") {
@@ -2212,7 +2226,7 @@ exports.oneButton = onRequest(
       try { send(await spData(body, visitor)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    const sso = req.path.match(/\/ss\/(list|get|create|request|admit|invite|accept|note|link|optin|bring)$/);
+    const sso = req.path.match(/\/ss\/(list|get|create|request|admit|invite|accept|note|link|optin|bring|unroll)$/);
     if (sso) {
       // Seed spaces: open to read, a member's sign-in (or a One Button key) to act.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
