@@ -464,6 +464,8 @@
 <div class="sheet" id="sheet-ivs">
   <div class="sheet-bar"><h2>Interviews</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body">
+    <div class="addrow" style="margin-bottom:6px"><input id="iv-q" class="full" placeholder="Search everything said, in every conversation" aria-label="Search conversations"><button id="iv-qgo">Search</button></div>
+    <div id="iv-qout"></div>
     <div id="sp-wrap" style="display:none"><div class="iv-h" style="margin-top:0">Shared spaces</div><div id="sp-list"></div><div class="iv-h">Recordings</div></div>
     <div id="iv-list"></div>
     <p class="note">Kept privately inside One Button until you share or process one. Processed interviews go to your vault, Interviews folder, by themselves when the laptop is on.</p>
@@ -2073,6 +2075,15 @@ const ivWhen=ts=>new Date(ts).toLocaleString([], {weekday:'short',day:'numeric',
 function ivLabel(f){const s=IVS[ivId(f.name)]||{};
   return s.status==='done'?(s.collected?'in your vault':'note ready'):s.status==='working'?'working':s.status==='error'?'not processed':'';}
 
+// Search across every conversation's words: each hit opens that conversation.
+function ivSearch(){const q=($('#iv-q').value||'').trim(),out=$('#iv-qout');if(!q){out.innerHTML='';return;}out.innerHTML='<p class="note">Searching…</p>';
+  fetch(API+'/api/search',{method:'POST',headers:obHeaders(),body:JSON.stringify({q})}).then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))))
+    .then(d=>{out.innerHTML=d.results.length?d.results.map((x,i)=>`<div class="note-item"><div class="ntext" data-ivq="${i}">${escapeHtml(x.title)}<div class="nmeta">${x.created?new Date(x.created).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):''}${(x.people||[]).length?' . with '+escapeHtml(x.people.join(', ')):''}${x.imported?' . imported':''}</div>
+      ${x.hits.slice(0,2).map(h=>`<div class="nmeta" style="font-style:italic">${h.at?Math.floor(h.at/60)+':'+String(h.at%60).padStart(2,'0')+' ':''}"${escapeHtml(h.line.slice(0,160))}"</div>`).join('')}</div></div>`).join(''):'<p class="note">Nothing found for that.</p>';
+      out.querySelectorAll('[data-ivq]').forEach(e=>e.onclick=()=>openIv(d.results[+e.dataset.ivq].iv+'.m4a',false));})
+    .catch(e=>{out.innerHTML='<p class="note">'+escapeHtml(e.message)+'</p>';});}
+document.addEventListener('click',e=>{if(e.target&&e.target.id==='iv-qgo')ivSearch();});
+document.addEventListener('keydown',e=>{if(e.target&&e.target.id==='iv-q'&&e.key==='Enter')ivSearch();});
 function renderInterviews(){
   const box=$('#iv-list'); if(!NATIVE||!NATIVE.listInterviews){box.innerHTML='';return;}
   const list=ivFiles();

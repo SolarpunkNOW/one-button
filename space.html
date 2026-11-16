@@ -114,7 +114,13 @@
 
   <h2>Conversations</h2>
   <p class="lede">The recordings, what each was about, and the full words.</p>
+  <div class="row hidden" id="find"><input id="find-q" style="flex:1;min-width:180px;font:16px Inter,sans-serif;padding:10px;border:1px solid var(--ink)" placeholder="Search what was said" aria-label="Search what was said"><button id="find-go">Search</button></div>
+  <div id="find-out"></div>
   <div id="convs"></div>
+
+  <h2>Seeds</h2>
+  <p class="lede">Ideas, projects and questions harvested from these conversations. Each stays here until everyone in the conversation says yes. Then it can go into a seed space, an open commons on its topic, anonymous unless you choose to show your name, shared under CC BY-SA 4.0.</p>
+  <div id="seeds"><p class="tag">Sign in to see the seeds.</p></div>
 
   <h2>Highlights</h2>
   <p class="lede">The parts of this space you both agree can travel: a few points and lines, each pointing at the moment it came from. The conversations themselves stay here.</p>
@@ -254,7 +260,8 @@ $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-
   <span class="tag">${esc(p.status)}${byTag(p)}${p.held?' . held, only you see this: '+esc(p.held):''}</span><h3>${esc(p.name)}</h3><div>${esc(p.about)}</div>${provLine(p)}
   <div class="next"><span class="tag">Next step</span><br>${esc(p.next)}</div>
   ${D.tasks.some(t=>t.project===p.id)?`<div class="who" style="margin-top:10px"><span class="tag">To do in this project</span>${D.tasks.filter(t=>t.project===p.id).map(t=>`<label class="task"><input type="checkbox" ${t.done?'checked':''} disabled><span>${t.done?'<s>':''}${esc(t.text)}${t.done?'</s>':''}<span class="tag">${t.due?esc(t.due):''}</span></span></label>`).join('')}</div>`:''}
-  ${p.convs.length?`<p class="tag" style="margin:10px 0 0">From: ${p.convs.map(c=>esc(conv(c).title)).join(' . ')}</p>`:''}</div>`).join('');
+  ${p.convs.length?`<p class="tag" style="margin:10px 0 0">From: ${p.convs.map(c=>esc(conv(c).title)).join(' . ')}</p>`:''}
+  ${ACT&&!p.held?`<div class="row"><button class="link" data-projseed="${esc(p.id||p.name)}">Propose as a seed</button></div>`:''}</div>`).join('');
 
 const groups=[['both','Together'],[D.viewer,'You said you would'],['jay','Jay is doing']];
 $('#tasks').innerHTML=groups.map(([who,label])=>{const ts=D.tasks.filter(t=>t.who===who&&!t.project); if(!ts.length)return '';
@@ -263,7 +270,7 @@ $('#tasks').innerHTML=groups.map(([who,label])=>{const ts=D.tasks.filter(t=>t.wh
 
 $('#convs').innerHTML=D.convs.map(c=>`<div class="box conv" id="conv-${esc(c.id)}">
   <span class="tag">${ACT?`<input type="checkbox" data-hl="${esc(c.id)}" style="width:18px;height:18px;vertical-align:middle;margin-right:8px" aria-label="Use in a highlight">`:''}${esc(c.date)}${c.mins?' . '+c.mins+' min':''}${byTag(c)}</span><h3>${esc(c.title)}</h3><div>${esc(c.summary)}</div>
-  <div class="row">${c.audio&&ACT?`<button data-au="${esc(c.id)}">Play recording</button>`:''}${(c.transcript||c.heavy||ACT)?`<button data-tr="${esc(c.id)}">Read transcript</button>`:''}</div><div class="hidden" id="au-${esc(c.id)}" style="margin-top:10px"></div>${c.note?`<p class="tag" style="margin:8px 0 0">${esc(c.note)}</p>`:''}
+  <div class="row">${c.audio&&ACT?`<button data-au="${esc(c.id)}">Play recording</button>`:''}${(c.transcript||c.heavy||ACT)?`<button data-tr="${esc(c.id)}">Read transcript</button>`:''}${ACT&&!c.held?`<button data-harvest="${esc(c.id)}">Harvest seeds</button>`:''}</div><div class="hidden" id="au-${esc(c.id)}" style="margin-top:10px"></div>${c.note?`<p class="tag" style="margin:8px 0 0">${esc(c.note)}</p>`:''}
   <div class="tr hidden" id="tr-${esc(c.id)}">${esc(c.transcript||'')}</div></div>`).join('');
 // The words of a conversation come down only when asked for; the recording too.
 const words=id=>{const t=$('#tr-'+id);if(!t)return Promise.resolve();if(t.textContent.trim()||!ACT)return Promise.resolve();t.textContent='Fetching the words…';
@@ -278,15 +285,45 @@ const listen=(id,at)=>{const box=$('#au-'+id);if(!box)return;let a=box.querySele
 document.querySelectorAll('[data-tr]').forEach(b=>b.onclick=()=>{const t=$('#tr-'+b.dataset.tr);t.classList.toggle('hidden');
   b.textContent=t.classList.contains('hidden')?'Read transcript':'Hide transcript';if(!t.classList.contains('hidden'))words(b.dataset.tr);});
 document.querySelectorAll('[data-au]').forEach(b=>b.onclick=()=>listen(b.dataset.au,0));
-document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.dataset.prov,at=+b.dataset.at||0,box=$('#conv-'+id),t=$('#tr-'+id);if(!box)return;
+const wireProv=()=>document.querySelectorAll('[data-prov]').forEach(b=>b.onclick=()=>{const id=b.dataset.prov,at=+b.dataset.at||0,box=$('#conv-'+id),t=$('#tr-'+id);if(!box)return;
   if(t){t.classList.remove('hidden');words(id);}box.scrollIntoView({behavior:'smooth',block:'start'});
   const c=conv(id);if(c.audio&&ACT&&at)listen(id,at);});
+wireProv();
 
 // Share-out for anything already agreed and public: the big apps by their own share links, and the
 // phone's share sheet for the rest (Instagram, Signal, email...). Only public links ever go out.
 const shareOut=(url,title)=>{const u=encodeURIComponent(url),t=encodeURIComponent(title+' '),both=encodeURIComponent(title+' '+url);
   return `<span class="tag">Share out</span><a class="btn" href="https://t.me/share/url?url=${u}&text=${t}" target="_blank" rel="noopener">Telegram</a><a class="btn" href="https://wa.me/?text=${both}" target="_blank" rel="noopener">WhatsApp</a><a class="btn" href="https://www.facebook.com/sharer/sharer.php?u=${u}" target="_blank" rel="noopener">Facebook</a><a class="btn" href="https://www.linkedin.com/sharing/share-offsite/?url=${u}" target="_blank" rel="noopener">LinkedIn</a>${navigator.share?`<button data-native="${esc(url)}" data-title="${esc(title)}">More, including Instagram</button>`:''}`;};
 document.addEventListener('click',e=>{const b=e.target.closest('[data-native]');if(!b)return;navigator.share({title:b.dataset.title,text:b.dataset.title,url:b.dataset.native}).catch(()=>{});});
+// Search: every hit is a moment; tapping it opens the words and plays from that second.
+$('#find').classList.toggle('hidden',!ACT);
+const doFind=()=>{const q=$('#find-q').value.trim();if(!q)return;$('#find-out').innerHTML='<p class="tag">Searching…</p>';
+  actCall('search',{slug:SLUG,q}).then(r=>{$('#find-out').innerHTML=r.results.length?r.results.map(x=>`<div class="box"><b>${esc(x.title)}</b> <span class="tag">${esc(x.date||'')}</span>
+    ${x.hits.length?x.hits.map(h=>`<div style="margin-top:6px"><button class="link" data-prov="${esc(x.conv)}" data-at="${+h.at||0}">${h.at?mmss(h.at):'Open'}</button> ${esc(h.line)}</div>`).join(''):'<div class="tag">Mentioned in the summary</div>'}</div>`).join(''):'<p class="tag">Nothing found for that.</p>';
+    wireProv();}).catch(e=>{$('#find-out').innerHTML='<p class="tag">'+esc(e.message)+'</p>';});};
+$('#find-go').onclick=doFind;$('#find-q').onkeydown=e=>{if(e.key==='Enter')doFind();};
+
+// Seeds: harvested here, agreed here, then out to a seed space.
+const SEEDLBL={private:'waiting for everyone\'s yes',agreed:'agreed, ready for a seed space',offered:'offered to a seed space',public:'public in a seed space'};
+function loadSeeds(){if(!ACT)return;actCall('seeds',{slug:SLUG}).then(r=>Promise.all([r,post('../ss/list',{}).catch(()=>({spaces:[]}))])).then(([r,l])=>{
+  const me=r.me,ss=l.spaces||[];
+  $('#seeds').innerHTML=r.seeds.length?r.seeds.map(s=>{const mine=(s.consent||{})[me],all=Object.values(s.consent||{}).every(v=>v==='ok');
+    return `<div class="box"><span class="tag">${esc(s.kind)} . ${esc(SEEDLBL[s.status]||s.status)}${s.seedSpace?' . '+esc(s.seedSpace):''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>
+      ${s.prov&&s.prov.conv?`<span class="tag" style="display:block;margin-top:4px;font-style:italic;text-transform:none;letter-spacing:0"><button class="link" data-prov="${esc(s.prov.conv)}" data-at="${+s.prov.at||0}">From ${esc(s.convTitle||'a conversation')}${s.prov.at?' at '+mmss(s.prov.at):''}</button>${s.prov.quote?': "'+esc(s.prov.quote)+'"':''}</span>`:''}
+      <div class="row">${Object.entries(s.consent||{}).map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ')}</div>
+      <div class="row">${mine&&mine!=='ok'?`<button data-sok="${esc(s.id)}">Yes, this seed can travel</button>`:''}${s.status!=='public'&&(s.by===me||me==='jay')?`<button class="link" data-sdrop="${esc(s.id)}">Drop it</button>`:''}${mine&&mine!=='no'?`<button class="link" data-sno="${esc(s.id)}">${s.status==='public'?'Take it back':'Not this one'}</button>`:''}
+        ${all&&!s.seedSpace&&ss.length?`<select data-sto="${esc(s.id)}"><option value="">Put into a seed space...</option>${ss.map(x=>`<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join('')}</select>`:''}
+        ${s.seedSpace?`<a href="/s/?s=${esc(s.seedSpace)}" target="_blank" rel="noopener">Open the seed space</a>`:''}</div></div>`;}).join(''):'<p class="tag">No seeds yet. Tap Harvest seeds on a conversation.</p>';
+  wireProv();
+  document.querySelectorAll('[data-sok],[data-sno]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('seedok',{slug:SLUG,id:b.dataset.sok||b.dataset.sno,ok:!!b.dataset.sok}).then(loadSeeds).catch(e=>{b.disabled=false;say(e.message);});});
+  document.querySelectorAll('[data-sdrop]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('seeddrop',{slug:SLUG,id:b.dataset.sdrop}).then(loadSeeds).catch(e=>{b.disabled=false;say(e.message);});});
+  document.querySelectorAll('[data-sto]').forEach(s=>s.onchange=()=>{if(!s.value)return;s.disabled=true;actCall('seedto',{slug:SLUG,id:s.dataset.sto,to:s.value}).then(r=>{say(r.status==='public'?'The seed is in the seed space.':'Offered: a member of that seed space takes it in.');loadSeeds();}).catch(e=>{s.disabled=false;say(e.message);});});
+}).catch(e=>{$('#seeds').innerHTML='<p class="tag">'+esc(e.message)+'</p>';});}
+loadSeeds();
+document.querySelectorAll('[data-harvest]').forEach(b=>b.onclick=()=>{b.disabled=true;b.textContent='Harvesting…';
+  actCall('harvest',{slug:SLUG,conv:b.dataset.harvest}).then(r=>{b.textContent=r.ids.length+' seeds harvested';loadSeeds();$('#seeds').scrollIntoView({behavior:'smooth'});}).catch(e=>{b.disabled=false;b.textContent='Harvest seeds';say(e.message);});});
+document.querySelectorAll('[data-projseed]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('projseed',{slug:SLUG,project:b.dataset.projseed}).then(()=>{b.textContent='Proposed as a seed';loadSeeds();}).catch(e=>{b.disabled=false;say(e.message);});});
+
 // Highlights: consent per person, then out to a public page or (host only) into another space.
 const hls=D.docs.filter(d=>d.kind==='Highlight');
 $('#hl-make').classList.toggle('hidden',!ACT);

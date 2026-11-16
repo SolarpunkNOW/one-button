@@ -13,6 +13,8 @@
       { "source": "/api/sync", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/interview/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/space/**", "function": "oneButton", "region": "us-central1" },
+      { "source": "/api/ss/**", "function": "oneButton", "region": "us-central1" },
+      { "source": "/api/search", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/hl/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/theme/**", "function": "oneButton", "region": "us-central1" },
       { "source": "/api/shop/**", "function": "oneButton", "region": "us-central1" },

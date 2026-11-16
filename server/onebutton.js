@@ -802,7 +802,8 @@ async function splitConvs(slug, convs) {
   for (const c of convs || []) {
     if (!c || (c.transcript === undefined && c.segments === undefined)) continue;
     const transcript = String(c.transcript || ""), segments = Array.isArray(c.segments) ? c.segments : [];
-    if (transcript || segments.length) { await convRef(slug, c.id).set({ id: c.id, transcript, segments, iv: c.iv || "" }, { merge: true }); moved++; }
+    // Words always; timings only when there are some, so a rebuild without them never erases them.
+    if (transcript || segments.length) { await convRef(slug, c.id).set({ id: c.id, transcript, ...(segments.length ? { segments } : {}), ...(c.iv ? { iv: c.iv } : {}) }, { merge: true }); moved++; }
     delete c.transcript; delete c.segments; c.heavy = true;
   }
   return moved;
@@ -833,6 +834,11 @@ const weaveGet = (route) => fetch(WEAVE + route).then((r) => r.json());
 async function spSave(body) {
   const slug = String(body.slug || ""), data = body.data;
   if (!SLUG_RE.test(slug) || !data || typeof data !== "object") return [400, { error: "bad space" }];
+  // The laptop rebuilds a space from the vault and knows nothing of what the server added since:
+  // the recording link and whether it can be played carry over by title.
+  const prev = await spaceRef(slug).get();
+  const was = new Map((((prev.data() || {}).data || {}).convs || []).map((c) => [c.title, c]));
+  for (const c of data.convs || []) { const o = was.get(c.title); if (o) { if (!c.iv && o.iv) c.iv = o.iv; if (o.audio) c.audio = true; } }
   await splitConvs(slug, data.convs);
   if (JSON.stringify(data).length > 900000) return [413, { error: "space too big" }];
   await spaceRef(slug).set({ slug, person: String(body.person || ""), name: String(body.name || ""), data, updated: Date.now() }, { merge: true });
@@ -1147,6 +1153,290 @@ async function spHighlight(req, body, visitor) {
  * and, to the public, only the seeds everyone has agreed to. Host only to build and publish. */
 const themeRef = (slug) => listRef().collection("themes").doc(slug);
 const hasWords = (words, ...parts) => { const t = parts.map((p) => Array.isArray(p) ? p.join(" ") : String(p || "")).join(" ").toLowerCase(); return words.some((w) => t.includes(w)); };
+/* ---------- Search and listening ---------- */
+// Words in, moments out: each hit is a conversation, the second it happens and the line around it.
+function findIn(transcript, segments, q) {
+  const words = WORDS(q); if (!words.length) return [];
+  const hits = [];
+  if (Array.isArray(segments) && segments.length) {
+    for (const [at, text] of segments) { const t = String(text).toLowerCase(); if (words.every((w) => t.includes(w))) hits.push({ at, line: String(text).slice(0, 240) }); if (hits.length >= 5) break; }
+    if (hits.length) return hits;
+  }
+  const t = String(transcript || ""), low = t.toLowerCase();
+  let i = low.indexOf(words[0]);
+  while (i >= 0 && hits.length < 5) {
+    const win = low.slice(Math.max(0, i - 200), i + 200);
+    if (words.every((w) => win.includes(w))) hits.push({ at: 0, line: t.slice(Math.max(0, i - 100), i + 160).replace(/\s+/g, " ").trim() });
+    i = low.indexOf(words[0], i + 200);
+  }
+  return hits;
+}
+async function searchAll(req, body, visitor) {
+  const q = String(body.q || "").trim().slice(0, 120), slug = String(body.slug || "");
+  if (WORDS(q).length === 0) return [400, { error: "type a word or two" }];
+  const out = [];
+  if (slug) {
+    if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+    const by = await actorFor(req, body, slug, visitor);
+    const s = await migrateSpace(slug, await spaceRef(slug).get());
+    if (!s.exists) return [404, { error: "no such space" }];
+    for (const c of withAdded(s).convs || []) {
+      if (c.held && by.id !== "jay") continue;
+      const h = await convHeavy(slug, c.id);
+      const hits = findIn(h.transcript || "", h.segments || [], q);
+      if (hits.length || hasWords(WORDS(q), c.title, c.summary, c.points)) out.push({ space: slug, conv: c.id, title: c.title, date: c.date, audio: !!c.audio, hits });
+    }
+    return [200, { q, results: out }];
+  }
+  const me = await whoIs(req).catch(() => null);
+  if (!me) return [401, { error: "not signed in" }];
+  await PERSON.run(me, async () => {
+    for (const d of (await listRef().collection("interviews").get()).docs) {
+      const iv = d.data(); if (iv.status !== "done") continue;
+      const hits = findIn(iv.transcript || "", iv.segments || [], q);
+      if (hits.length || hasWords(WORDS(q), iv.title, iv.summary, iv.points)) out.push({ iv: iv.id, title: iv.title || iv.name, created: iv.created, people: iv.people || [], imported: !!iv.imported, hits });
+    }
+  });
+  out.sort((a, b) => (b.hits.length - a.hits.length) || ((b.created || 0) - (a.created || 0)));
+  return [200, { q, results: out.slice(0, 40) }];
+}
+// The laptop puts back a recording the server let go of, and the words get their timings.
+async function ivReaudio(req) {
+  const id = String(req.query.id || "");
+  if (!ID_RE.test(id)) return [400, { error: "bad id" }];
+  const buf = req.rawBody;
+  if (!buf || !buf.length) return [400, { error: "no audio" }];
+  const mime = /^audio\/(webm|ogg|mp4)/.test(String(req.query.mime || "")) ? String(req.query.mime).split(";")[0] : "audio/mp4";
+  await audioFile(id).save(buf, { contentType: mime, resumable: false });
+  let segments = [];
+  if (buf.length <= GROQ_MAX && req.query.retime === "1") { const tr = await transcribeBuffer(buf, mime); if (tr.status === 200) segments = tr.json.segments || []; }
+  const ivDoc = listRef().collection("interviews").doc(id);
+  if ((await ivDoc.get()).exists) await ivDoc.update({ audioKept: true, ...(segments.length ? { segments } : {}) });
+  let spaces = 0;
+  for (const s of (await listRef().collection("spaces").get()).docs) {
+    const x = s.data(), d = x.data || {}, a = x.added || {};
+    let hit = false;
+    // A conversation the laptop built from the vault is bound to its recording here, by slug and id.
+    for (const c of [...(d.convs || []), ...(a.convs || [])]) if (c && (c.iv === id || (s.id === req.query.slug && c.id === req.query.conv))) { c.iv = id; c.audio = true; hit = true; if (segments.length) await convRef(s.id, c.id).set({ segments }, { merge: true }); }
+    if (hit) { await s.ref.set({ data: d, added: a }, { merge: true }); spaces++; }
+  }
+  return [200, { ok: true, segments: segments.length, spaces }];
+}
+async function ivRemove(body) {
+  const id = String(body.id || "");
+  if (!/^import-[\w-]{1,60}$/.test(id)) return [400, { error: "only imported conversations can be removed this way" }];
+  await listRef().collection("interviews").doc(id).delete();
+  return [200, { ok: true }];
+}
+
+/* ---------- Seeds and seed spaces ----------
+ * A seed is an idea, project or question harvested from a conversation, pointing at the moment
+ * it came from. It belongs to the people who were in that conversation: it stays private until
+ * every one of them says yes. An agreed seed can go into a seed space: an open commons around
+ * one topic, readable by anyone, where members add notes, link their own conversations and bring
+ * their own seeds. Joining is by the agreement of anyone already in it. Names are anonymous
+ * unless a member opts in. Everything public is CC BY-SA 4.0. Seed spaces belong to the network,
+ * not to one person's list. */
+const seedsCol = () => admin.firestore().collection("onebutton_seeds");
+const ssCol = () => admin.firestore().collection("onebutton_seedspaces");
+const LICENCE = { name: "CC BY-SA 4.0", url: "https://creativecommons.org/licenses/by-sa/4.0/" };
+const SEED_SYS = `You harvest seeds from a conversation: the ideas, projects and open questions in it that other people could build on. Reply with JSON only:
+{"seeds": [{"kind": "idea" or "project" or "question", "title": "at most 10 words", "about": "one or two plain sentences someone outside could understand and act on", "quote": "the short word-for-word line from the transcript it rests on"}]}
+2 to 6 seeds, the strongest only. Never name anyone: say "one person" or "they". Nothing private, nothing about anyone's money, health or family. Never anything negative or reflective about any individual's personality, character or state of mind: ideas, questions and actions only. Pick quotes that name nobody. Warm, exact, no em dashes.`;
+async function spHarvest(req, body, visitor) {
+  const slug = String(body.slug || ""), cid = String(body.conv || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), c = (d.convs || []).find((x) => x.id === cid);
+  if (!c || (c.held && by.id !== "jay")) return [404, { error: "no such conversation" }];
+  const h = await convHeavy(slug, c.id);
+  const out = await chat({ messages: [{ role: "system", content: SEED_SYS }, { role: "user", content: `## ${c.title}\n${h.transcript || c.summary || ""}`.slice(0, 60000) }] }, 2500);
+  let got = null;
+  try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  const list = (got && Array.isArray(got.seeds) ? got.seeds : []).slice(0, 6);
+  if (!list.length) return [502, { error: "no seeds found" }];
+  const people = (d.people || []).map((p) => p.id), at = Date.now(), batch = admin.firestore().batch(), ids = [];
+  list.forEach((x, i) => {
+    const id = "s" + (at + i).toString(36), a = anchor(h.segments || [], x.quote);
+    const consent = {}; for (const p of people) consent[p] = p === by.id ? "ok" : "pending";
+    batch.set(seedsCol().doc(id), { id, kind: ["idea", "project", "question"].includes(x.kind) ? x.kind : "idea", title: String(x.title || "").slice(0, 120), about: String(x.about || "").slice(0, 600),
+      prov: { space: slug, conv: c.id, at: a.at, quote: a.quote }, convTitle: c.title, convDate: c.date, origin: slug, people, consent, status: "private", seedSpace: "", by: by.id, at: at + i, licence: LICENCE.name });
+    ids.push(id);
+  });
+  await batch.commit();
+  return [200, { ok: true, ids }];
+}
+// A project in a space, proposed as a seed: same consent as any seed.
+async function spProjectSeed(req, body, visitor) {
+  const slug = String(body.slug || ""), pid = String(body.project || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await spaceRef(slug).get();
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), p = (d.projects || []).find((x) => x.id === pid || x.name === pid);
+  if (!p || (p.held && by.id !== "jay")) return [404, { error: "no such project" }];
+  const people = (d.people || []).map((x) => x.id), at = Date.now(), id = "s" + at.toString(36);
+  const consent = {}; for (const q of people) consent[q] = q === by.id ? "ok" : "pending";
+  const conv = (p.convs || [])[0] || (p.prov && p.prov.conv) || "";
+  await seedsCol().doc(id).set({ id, kind: "project", title: String(p.name).slice(0, 120), about: String(p.about || "").slice(0, 600), prov: { space: slug, conv, at: (p.prov && p.prov.at) || 0, quote: (p.prov && p.prov.quote) || "" },
+    convTitle: conv ? ((d.convs || []).find((c) => c.id === conv) || {}).title || "" : "", origin: slug, people, consent, status: "private", seedSpace: "", by: by.id, at, licence: LICENCE.name, project: p.id || p.name });
+  return [200, { ok: true, id }];
+}
+async function spSeeds(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const seeds = (await seedsCol().where("origin", "==", slug).get()).docs.map((x) => x.data()).sort((a, b) => b.at - a.at);
+  return [200, { me: by.id, seeds }];
+}
+// Yes or no from someone in the conversation. All yes: agreed. A no after it went out takes it back.
+async function spSeedOk(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const ref = seedsCol().doc(id), s = await ref.get();
+  if (!s.exists || s.data().origin !== slug) return [404, { error: "no such seed" }];
+  const x = s.data();
+  if (!(x.people || []).includes(by.id)) return [403, { error: "only the people in the conversation decide" }];
+  const consent = { ...(x.consent || {}), [by.id]: body.ok ? "ok" : "no" };
+  const all = Object.values(consent).every((v) => v === "ok");
+  const upd = { consent, status: all ? (x.status === "public" || x.status === "offered" ? x.status : "agreed") : "private" };
+  if (!all && x.seedSpace) upd.seedSpace = "";
+  await ref.update(upd);
+  return [200, { ok: true, ...upd }];
+}
+// The person who harvested a seed (or the host) can drop it before it goes anywhere.
+async function spSeedDrop(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const ref = seedsCol().doc(id), s = await ref.get();
+  if (!s.exists || s.data().origin !== slug) return [404, { error: "no such seed" }];
+  if (by.id !== "jay" && s.data().by !== by.id) return [403, { error: "only whoever harvested it can drop it" }];
+  if (s.data().status === "public") return [409, { error: "it is public: say no to take it back first" }];
+  await ref.delete();
+  return [200, { ok: true }];
+}
+// Who is acting in a seed space: a One Button key holder, or a Weave member of its community.
+async function ssActor(req, body, slug, visitor) {
+  const me = await whoIs(req).catch(() => null);
+  if (me) return { id: me.name, key: true };
+  const token = String(body.token || "");
+  if (!token) return null;
+  const r = await fetch(WEAVE + "/session", { method: "POST", headers: { "content-type": "application/json", ...(visitor ? { "x-forwarded-for": visitor } : {}) },
+    body: JSON.stringify({ token, requireCommunity: "ss-" + slug }) });
+  const v = await r.json().catch(() => ({}));
+  if (!v || !v.ok) return null;
+  return { id: pidOf(String(v.agentName || "").split("/@").pop()), key: false };
+}
+async function ssLoad(slug) { const s = await ssCol().doc(slug).get(); if (!s.exists) throw Object.assign(new Error("no such seed space"), { code: 404 }); return s; }
+const isMember = (ss, a) => !!(a && (ss.members || {})[a.id]);
+const shownName = (ss, id) => { const m = (ss.members || {})[id]; return m && m.show ? (m.label || id) : ""; };
+// Put an agreed seed into a seed space. A member puts it straight in; anyone else offers it and
+// any member can take it in.
+async function spSeedTo(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || ""), to = String(body.to || "");
+  if (!SLUG_RE.test(slug) || !SLUG_RE.test(to)) return [400, { error: "bad request" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const ref = seedsCol().doc(id), s = await ref.get();
+  if (!s.exists || s.data().origin !== slug) return [404, { error: "no such seed" }];
+  const x = s.data();
+  if (!Object.values(x.consent || {}).every((v) => v === "ok")) return [409, { error: "everyone in the conversation says yes first" }];
+  const ss = (await ssLoad(to)).data();
+  const member = !!(ss.members || {})[by.id];
+  await ref.update({ seedSpace: to, status: member ? "public" : "offered", offeredBy: by.id, offeredAt: Date.now() });
+  return [200, { ok: true, status: member ? "public" : "offered" }];
+}
+async function ssList() {
+  return [200, { spaces: (await ssCol().get()).docs.map((d) => { const x = d.data(); return { slug: x.slug, name: x.name, about: x.about || "", words: x.words || [], members: Object.keys(x.members || {}).length }; }) }];
+}
+async function ssCreate(req, body) {
+  const me = await whoIs(req).catch(() => null);
+  if (!me) return [401, { error: "not signed in" }];
+  const slug = String(body.slug || "").toLowerCase();
+  if (!SLUG_RE.test(slug) || slug.length > 34) return [400, { error: "bad name" }];
+  if ((await ssCol().doc(slug).get()).exists) return [409, { error: "already exists" }];
+  const words = (Array.isArray(body.words) ? body.words : []).map((w) => String(w).toLowerCase().trim()).filter(Boolean).slice(0, 20);
+  await ssCol().doc(slug).set({ slug, name: String(body.name || slug).slice(0, 80), about: String(body.about || "").slice(0, 600), words, licence: LICENCE, created: Date.now(), by: me.name,
+    members: { [me.name]: { since: Date.now(), show: false, label: me.name === "jay" ? "Jay" : me.name } }, requests: [], notes: [], links: [] });
+  const com = "ss-" + slug;
+  const reg = await weaveGet("/registry?id=" + encodeURIComponent(com)).catch(() => ({}));
+  if (!reg.recognised) {
+    await weaveAdmin("community-create", { name: "Seed space: " + String(body.name || slug).slice(0, 60), slug: com, admission: "vouch" });
+    await weaveAdmin("community-policy", { community: com, admission: "vouch", vouchThreshold: 1, vouchLimit: 0, recoveryThreshold: 1, directory: "private" });
+  }
+  return [200, { ok: true, slug }];
+}
+async function ssGet(req, body, visitor) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad seed space" }];
+  const snap = await ssLoad(slug), ss = snap.data(), a = await ssActor(req, body, slug, visitor);
+  // A Weave member of the community who is not on the roll yet (just redeemed an invitation) is added now.
+  if (a && !a.key && !(ss.members || {})[a.id]) { ss.members = { ...(ss.members || {}), [a.id]: { since: Date.now(), show: false, label: a.id } }; await snap.ref.update({ members: ss.members }); }
+  const member = isMember(ss, a);
+  const seeds = (await seedsCol().where("seedSpace", "==", slug).get()).docs.map((d) => d.data()).filter((x) => x.status === "public" || (member && x.status === "offered"));
+  const anon = (ids) => { const named = (ids || []).map((i) => shownName(ss, i)).filter(Boolean); const rest = (ids || []).length - named.length; return named.concat(rest > 0 ? [rest === 1 ? "a member" : rest + " members"] : []); };
+  return [200, {
+    slug, name: ss.name, about: ss.about, licence: ss.licence || LICENCE, words: ss.words || [], me: member ? { id: a.id, show: !!(ss.members[a.id] || {}).show } : null,
+    members: Object.keys(ss.members || {}).length, named: Object.entries(ss.members || {}).filter(([, m]) => m.show).map(([, m]) => m.label),
+    seeds: seeds.map((x) => ({ id: x.id, kind: x.kind, title: x.title, about: x.about, quote: x.prov && x.prov.quote, at: x.prov && x.prov.at, convTitle: x.convTitle, from: anon(x.people), status: x.status, when: new Date(x.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) })),
+    notes: (ss.notes || []).map((n) => ({ id: n.id, seed: n.seed || "", text: n.text, by: shownName(ss, n.by) || "a member", at: n.at })),
+    links: (ss.links || []).map((l) => ({ id: l.id, title: l.title, summary: l.summary, by: shownName(ss, l.by) || "a member", at: l.at })),
+    requests: member ? (ss.requests || []).filter((r) => !r.done) : undefined,
+  }];
+}
+async function ssAct(req, body, visitor, action) {
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad seed space" }];
+  const snap = await ssLoad(slug), ss = snap.data();
+  if (action === "request") {
+    // Anyone may ask; nobody is in until someone already in says yes.
+    const name = String(body.name || "").trim().slice(0, 40), why = String(body.why || "").trim().slice(0, 400);
+    if (!/^[A-Za-z][A-Za-z0-9 .'-]{1,39}$/.test(name)) return [400, { error: "a first name, please" }];
+    await snap.ref.update({ requests: [...(ss.requests || []), { id: "r" + Date.now().toString(36), name, why, contact: String(body.contact || "").slice(0, 120), at: Date.now() }].slice(-200) });
+    return [200, { ok: true }];
+  }
+  const a = await ssActor(req, body, slug, visitor);
+  if (!isMember(ss, a)) return [403, { error: "only members can do that" }];
+  const now = Date.now();
+  if (action === "admit" || action === "invite") {
+    // Any member's yes is enough. The server issues the invitation on the community's behalf.
+    let name = String(body.name || ""), rid = String(body.request || "");
+    if (action === "admit") { const r = (ss.requests || []).find((x) => x.id === rid); if (!r) return [404, { error: "no such request" }]; name = r.name; }
+    const pid = pidOf(name); if (!pid) return [400, { error: "a name, please" }];
+    const inv = await weaveAdmin("admin-invite", { community: "ss-" + slug, forName: pid, forLabel: name, role: "member" });
+    const requests = (ss.requests || []).map((x) => x.id === rid ? { ...x, done: true, admittedBy: a.id, at2: now } : x);
+    await snap.ref.update({ requests, vouches: [...(ss.vouches || []), { who: pid, by: a.id, at: now }] });
+    return [200, { ok: true, link: OB_SITE + "/s/?s=" + slug + "&invite=" + inv.inviteId, name }];
+  }
+  if (action === "accept") {
+    const ref = seedsCol().doc(String(body.seed || "")), s = await ref.get();
+    if (!s.exists || s.data().seedSpace !== slug) return [404, { error: "no such seed" }];
+    await ref.update({ status: "public", acceptedBy: a.id, acceptedAt: now });
+    return [200, { ok: true }];
+  }
+  if (action === "note") {
+    const text = String(body.text || "").trim().slice(0, 1500); if (!text) return [400, { error: "nothing to add" }];
+    await snap.ref.update({ notes: [...(ss.notes || []), { id: "n" + now.toString(36), seed: String(body.seed || "").slice(0, 40), text, by: a.id, at: now }].slice(-1000) });
+    return [200, { ok: true }];
+  }
+  if (action === "link") {
+    // A parallel conversation joins by its title and a line or two. Its words stay with its people.
+    const title = String(body.title || "").trim().slice(0, 140), summary = String(body.summary || "").trim().slice(0, 800);
+    if (!title) return [400, { error: "a title, please" }];
+    await snap.ref.update({ links: [...(ss.links || []), { id: "l" + now.toString(36), title, summary, iv: String(body.iv || "").slice(0, 80), by: a.id, at: now }].slice(-500) });
+    return [200, { ok: true }];
+  }
+  if (action === "optin") {
+    const members = { ...(ss.members || {}) }; members[a.id] = { ...(members[a.id] || {}), show: !!body.show, label: String(body.label || (members[a.id] || {}).label || a.id).slice(0, 40) };
+    await snap.ref.update({ members });
+    return [200, { ok: true }];
+  }
+  return [400, { error: "unknown action" }];
+}
+
 async function themeBuild(body) {
   const slug = String(body.slug || ""), name = String(body.name || slug).slice(0, 80);
   const words = (Array.isArray(body.words) ? body.words : []).map((w) => String(w).toLowerCase().trim()).filter(Boolean).slice(0, 20);
@@ -1439,7 +1729,7 @@ async function ivDrop(body) {
   await listRef().collection("asks").doc(askId).update({ ship: "declined", stage: "declined", status: "done", dropped: Date.now(), planOk: false });
   return [200, { ok: true }];
 }
-const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, import: ivImport, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
+const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, import: ivImport, remove: ivRemove, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
 const SP_ROUTES = { save: spSave, list: spList, get: spGet, invite: spInvite, code: spCode, person: spForPerson };
 
 exports.oneButton = onRequest(
@@ -1470,13 +1760,29 @@ exports.oneButton = onRequest(
       try { send(await spData(body, visitor)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export"].includes(sp[1])) {
+    const sso = req.path.match(/\/ss\/(list|get|create|request|admit|invite|accept|note|link|optin)$/);
+    if (sso) {
+      // Seed spaces: open to read, a member's sign-in (or a One Button key) to act.
+      const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
+      if (sso[1] !== "get" && sso[1] !== "list" && !(await checkRateLimit(sso[1] === "request" ? 20 : 300, "obss_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
+      try { send(sso[1] === "list" ? await ssList() : sso[1] === "get" ? await ssGet(req, body, visitor) : sso[1] === "create" ? await ssCreate(req, body) : await ssAct(req, body, visitor, sso[1])); }
+      catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
+    if (req.path.endsWith("/search") && !sp) {
+      const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
+      try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
       if (!(await checkRateLimit(sp[1] === "record" || sp[1] === "highlight" ? 60 : 400, "obsp_" + visitor))) { res.status(429).json({ error: "daily limit reached" }); return; }
       if (sp[1] === "audio") { try { await spAudio(req, res, visitor); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); } return; }
-      const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor), transcript: () => spTranscript(req, body, visitor), export: () => spExport(req, body, visitor) }[sp[1]];
+      const fn = { record: () => spRecord(req, visitor), add: () => spAdd(req, body, visitor), highlight: () => spHighlight(req, body, visitor), consent: () => spConsent(req, body, visitor), publish: () => spPublish(req, body, visitor), transcript: () => spTranscript(req, body, visitor), export: () => spExport(req, body, visitor),
+        search: () => searchAll(req, body, visitor), harvest: () => spHarvest(req, body, visitor), projseed: () => spProjectSeed(req, body, visitor), seeds: () => spSeeds(req, body, visitor),
+        seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
@@ -1569,6 +1875,12 @@ async function routed(req, res, body, sp, send, me) {
       return;
     }
     const iv = req.path.match(/\/interview\/(\w+)$/);
+    if (iv && iv[1] === "reaudio") {
+      // Laptop puts a filed recording back on the server (raw audio body), host only.
+      if (!me.admin) { res.status(403).json({ error: "host only" }); return; }
+      try { send(await ivReaudio(req)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
     if (iv && iv[1] === "audio") {
       // Laptop helper fetches one recording to file into the vault.
       try {

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#FFFFFF" />
+<title>Seed Space</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* Mycelial Minimalism, same as One Button: white paper, ink, spark accent, hairlines, square corners. */
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  [hidden],.hidden{display:none!important}
+  body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:760px;margin:0 auto;padding:0 16px 64px}
+  .bar{display:flex;justify-content:space-between;align-items:baseline;padding:20px 0 8px}
+  .mark{font:700 18px "Inter Tight",sans-serif;letter-spacing:-.01em}
+  .mark b{box-shadow:inset 0 -6px 0 var(--spark)}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 34px/1.1 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:12px 0 6px}
+  h2{font:700 20px "Inter Tight",sans-serif;margin:40px 0 4px;letter-spacing:-.01em}
+  h3{font:700 17px "Inter Tight",sans-serif;margin:4px 0 6px}
+  .lede{color:var(--muted);margin:0 0 10px;font-size:15px}
+  .box{border:1px solid var(--line);padding:14px 16px;margin:12px 0}
+  .q{font-size:14px;border-left:2px solid var(--spark);padding:2px 0 2px 12px;margin-top:6px;font-style:italic;color:var(--muted)}
+  .note{font-size:15px;border-top:1px solid var(--line);padding:8px 0 0;margin-top:8px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+  button,a.btn{font:600 14px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--ink);padding:10px 14px;min-height:44px;cursor:pointer;border-radius:0;display:inline-flex;align-items:center;text-decoration:none}
+  button:hover{background:var(--surface)}
+  button.on{background:var(--ink);color:var(--paper)}
+  .link{background:none;border:0;padding:0;min-height:0;text-decoration:underline;color:var(--muted);font-weight:500}
+  input,textarea,select{font:16px "Inter",sans-serif;padding:10px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);width:100%;margin:4px 0 8px}
+  textarea{min-height:80px}
+  .me{background:var(--spark);padding:10px 12px;font-size:14px;margin:12px 0}
+  #map{width:100%;height:auto;border:1px solid var(--line);margin-top:8px}
+  #map text{font:500 11px "Inter",sans-serif;fill:var(--ink)}
+  .foot{margin-top:36px;color:var(--muted);font-size:14px}
+  a{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="mark">One <b>Button</b></span><span class="tag" id="mode">Seed space</span></div>
+  <div id="body"><p class="lede">Opening.</p></div>
+</div>
+<script>
+/* A seed space: an open commons around one topic. Anyone can read it. Members (anyone admitted
+   by someone already in) add notes, link their own conversations and take in seeds offered from
+   private spaces. Names show only for members who opt in. Content is CC BY-SA 4.0. */
+const $=s=>document.querySelector(s);
+const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const API=(/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app')+'/api/ss/';
+const CANOPY='https://canopy-website-ef7a8.web.app',WEAVE=CANOPY+'/api/weave-trust';
+const Q=new URLSearchParams(location.search),SLUG=Q.get('s')||'',INVITE=Q.get('invite');
+const COM='ss-'+SLUG;
+function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}
+  try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+const KEY=appKey();let W=null;
+const tok=()=>W&&W.token?W.token():'';
+const post=(route,body={})=>{if(tok())body.token=tok();return fetch(API+route,{method:'POST',headers:{'Content-Type':'application/json',...(KEY?{'x-ob-key':KEY}:{})},body:JSON.stringify(body)})
+  .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))));};
+const mmss=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+const say=t=>{const e=$('#say');if(e){e.textContent=t;e.hidden=!t;}};
+const shareOut=(url,title)=>{const u=encodeURIComponent(url),t=encodeURIComponent(title+' '),both=encodeURIComponent(title+' '+url);
+  return `<div class="row"><span class="tag">Share out</span><a class="btn" href="https://t.me/share/url?url=${u}&text=${t}" target="_blank" rel="noopener">Telegram</a><a class="btn" href="https://wa.me/?text=${both}" target="_blank" rel="noopener">WhatsApp</a><a class="btn" href="https://www.facebook.com/sharer/sharer.php?u=${u}" target="_blank" rel="noopener">Facebook</a><a class="btn" href="https://www.linkedin.com/sharing/share-offsite/?url=${u}" target="_blank" rel="noopener">LinkedIn</a>${navigator.share?`<button data-native="${esc(url)}" data-title="${esc(title)}">More, including Instagram</button>`:''}</div>`;};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-native]');if(!b)return;navigator.share({title:b.dataset.title,text:b.dataset.title,url:b.dataset.native}).catch(()=>{});});
+
+function render(d){
+  const M=!!d.me,url=location.origin+location.pathname+'?s='+encodeURIComponent(SLUG);
+  $('#mode').textContent=M?'Seed space, member':'Seed space';
+  const notesFor=id=>d.notes.filter(n=>n.seed===id);
+  const seed=s=>`<div class="box" id="seed-${esc(s.id)}"><span class="tag">${esc(s.kind)} . ${esc(s.when)} . from ${esc((s.from||[]).join(' and '))}${s.status==='offered'?' . offered, waiting for a member to take it in':''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>
+    ${s.quote?`<div class="q">${s.at?'At '+mmss(s.at)+': ':''}"${esc(s.quote)}"</div>`:''}
+    ${notesFor(s.id).map(n=>`<div class="note">${esc(n.text)} <span class="tag">${esc(n.by)}</span></div>`).join('')}
+    ${M?`<div class="row">${s.status==='offered'?`<button data-accept="${esc(s.id)}">Take it in</button>`:''}<button class="link" data-addnote="${esc(s.id)}">Add to this seed</button></div><div id="nf-${esc(s.id)}"></div>`:''}</div>`;
+  const pub=d.seeds.filter(s=>s.status==='public'),off=d.seeds.filter(s=>s.status==='offered');
+  $('#body').innerHTML=`<h1>${esc(d.name)}</h1><p class="lede">${esc(d.about||'')}</p>
+    <p class="tag">${d.members} member${d.members===1?'':'s'}${d.named.length?' . including '+esc(d.named.join(', ')):''} . ${pub.length} seed${pub.length===1?'':'s'} . ${d.links.length} linked conversation${d.links.length===1?'':'s'}</p>
+    ${M?`<div class="me">You are a member. ${d.me.show?'Your name shows on what you add.':'You are anonymous here: what you add shows as "a member".'} <button class="link" id="optin">${d.me.show?'Go anonymous':'Show my name'}</button></div>`:''}
+    <p id="say" class="me" hidden></p>
+    <h2>How it connects</h2><p class="lede">Seeds, the conversations they came from, and the conversations people have linked in.</p><svg id="map" role="img" aria-label="Map of seeds and conversations"></svg>
+    <h2>Seeds</h2>${pub.length?pub.map(seed).join(''):'<p class="lede">No seeds yet.</p>'}
+    ${M&&off.length?`<h2>Offered, waiting for a member</h2>${off.map(seed).join('')}`:''}
+    <h2>Conversations linked in</h2><p class="lede">Parallel conversations on the same topic. Their words stay with the people who had them; only a title and a line or two come here.</p>
+    ${d.links.length?d.links.map(l=>`<div class="box"><b>${esc(l.title)}</b> <span class="tag">${esc(l.by)}</span><div style="font-size:15px;color:var(--muted)">${esc(l.summary)}</div></div>`).join(''):'<p class="lede">None yet.</p>'}
+    ${M?`<div class="box"><b>Link one of your conversations</b><input id="lk-t" placeholder="Its title"><textarea id="lk-s" placeholder="A line or two on what it adds here"></textarea><button id="lk-go">Link it</button></div>`:''}
+    <h2>Notes</h2>${d.notes.filter(n=>!n.seed).map(n=>`<div class="note">${esc(n.text)} <span class="tag">${esc(n.by)}</span></div>`).join('')||'<p class="lede">None yet.</p>'}
+    ${M?`<div class="box"><textarea id="nt" placeholder="Add a note for everyone here"></textarea><button id="nt-go">Add the note</button></div>`:''}
+    ${M?`<h2>People asking to join</h2><p class="lede">Any one member's yes lets someone in. You get a link to send them.</p>
+      ${(d.requests||[]).map(r=>`<div class="box"><b>${esc(r.name)}</b> <span class="tag">${new Date(r.at).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span><div style="font-size:15px">${esc(r.why)}</div>${r.contact?`<div class="tag">${esc(r.contact)}</div>`:''}<div class="row"><button data-admit="${esc(r.id)}">Let them in</button></div><div id="ad-${esc(r.id)}"></div></div>`).join('')||'<p class="lede">Nobody waiting.</p>'}
+      <div class="box"><b>Invite someone</b><input id="iv-n" placeholder="Their first name"><button id="iv-go">Make their invitation</button><div id="iv-out"></div></div>`
+    :`<h2>Join</h2><div class="box"><p style="margin:0 0 8px">Members add notes, bring seeds from their own conversations and link conversations they are having on the same topic. Anyone already in can let you in.</p>
+      <input id="rq-n" placeholder="Your first name"><textarea id="rq-w" placeholder="What you are working on that connects"></textarea><input id="rq-c" placeholder="How they can reach you to send the link (optional)"><button id="rq-go">Ask to join</button>
+      <p class="tag" style="margin-top:12px">Already a member? <button class="link" id="si">Sign in</button></p><div id="si-box" hidden><input id="si-n" placeholder="Name"><input id="si-c" placeholder="Account code"><button id="si-go">Sign in</button></div></div>`}
+    ${pub.length?shareOut(url,d.name+': seeds from many conversations'):''}
+    <p class="foot">Shared under <a href="${esc(d.licence.url)}" target="_blank" rel="noopener">${esc(d.licence.name)}</a>: build on any of it, credit the seed space, share alike. Every seed comes from a private conversation and is here because everyone in it said yes. Made with One Button.</p>`;
+  map(d,pub);wire(d);
+}
+function map(d,pub){const svg=$('#map'),W=720,NS='http://www.w3.org/2000/svg',convs=[...new Set(pub.map(s=>s.convTitle).filter(Boolean))],links=d.links;
+  const H=Math.max(160,60+Math.max(pub.length,convs.length+links.length)*34);svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.innerHTML='';
+  const el=(n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);(p||svg).appendChild(e);return e;};
+  const sy=i=>40+i*34,cl=[...convs.map(t=>({t,kind:'c'})),...links.map(l=>({t:l.title,kind:'l'}))];
+  pub.forEach((s,i)=>{const j=convs.indexOf(s.convTitle);if(j>=0)el('path',{d:`M250,${sy(i)} C360,${sy(i)} 360,${sy(j)} 470,${sy(j)}`,stroke:'#1A1A1A','stroke-opacity':.3,fill:'none'});});
+  pub.forEach((s,i)=>{el('rect',{x:10,y:sy(i)-12,width:240,height:24,fill:'#E6FF00',stroke:'#1A1A1A','stroke-width':.8});const t=el('text',{x:18,y:sy(i)+4});t.textContent=s.title.length>34?s.title.slice(0,33)+'…':s.title;});
+  cl.forEach((c,j)=>{el('circle',{cx:478,cy:sy(j),r:6,fill:c.kind==='c'?'#1A1A1A':'#FFFFFF',stroke:'#1A1A1A'});const t=el('text',{x:492,y:sy(j)+4});t.textContent=(c.t.length>36?c.t.slice(0,35)+'…':c.t)+(c.kind==='l'?' (linked)':'');});}
+function wire(d){
+  const re=()=>load();
+  const on=(id,f)=>{const e=$(id);if(e)e.onclick=f;};
+  on('#optin',()=>post('optin',{slug:SLUG,show:!d.me.show}).then(re).catch(e=>say(e.message)));
+  on('#lk-go',()=>post('link',{slug:SLUG,title:$('#lk-t').value,summary:$('#lk-s').value}).then(()=>{say('Linked.');re();}).catch(e=>say(e.message)));
+  on('#nt-go',()=>post('note',{slug:SLUG,text:$('#nt').value}).then(re).catch(e=>say(e.message)));
+  on('#iv-go',()=>post('invite',{slug:SLUG,name:$('#iv-n').value}).then(r=>{$('#iv-out').innerHTML=`<p>Send this to ${esc(r.name)}. It works once: <a href="${esc(r.link)}">${esc(r.link)}</a></p>`;}).catch(e=>say(e.message)));
+  on('#rq-go',()=>post('request',{slug:SLUG,name:$('#rq-n').value,why:$('#rq-w').value,contact:$('#rq-c').value}).then(()=>{say('Asked. Any member can let you in and send you a link.');}).catch(e=>say(e.message)));
+  on('#si',()=>{$('#si-box').hidden=false;});
+  on('#si-go',()=>weave(()=>W.useAccountCode($('#si-n').value.trim().toLowerCase(),$('#si-c').value.trim(),{device:W.describeDevice()}).then(r=>{if(!r||!r.ok)throw new Error((r&&r.reason)||'sign-in failed');return W.login({name:$('#si-n').value.trim().toLowerCase(),requireCommunity:COM});}).then(re).catch(e=>say(e.message))));
+  document.querySelectorAll('[data-accept]').forEach(b=>b.onclick=()=>post('accept',{slug:SLUG,seed:b.dataset.accept}).then(re).catch(e=>say(e.message)));
+  document.querySelectorAll('[data-admit]').forEach(b=>b.onclick=()=>post('admit',{slug:SLUG,request:b.dataset.admit}).then(r=>{$('#ad-'+b.dataset.admit).innerHTML=`<p>Send this to ${esc(r.name)}. It works once: <a href="${esc(r.link)}">${esc(r.link)}</a></p>`;b.remove();}).catch(e=>say(e.message)));
+  document.querySelectorAll('[data-addnote]').forEach(b=>b.onclick=()=>{const id=b.dataset.addnote,box=$('#nf-'+id);box.innerHTML=`<textarea id="nfx-${esc(id)}" placeholder="What you would add"></textarea><button id="nfg-${esc(id)}">Add</button>`;
+    $('#nfg-'+id).onclick=()=>post('note',{slug:SLUG,seed:id,text:$('#nfx-'+id).value}).then(re).catch(e=>say(e.message));});
+}
+// Weave sign-in, loaded only when needed: an invitation joins, a kept sign-in opens.
+function weave(then){if(W)return then();window.WEAVE_NET=WEAVE;const s=document.createElement('script');s.src=WEAVE+'/wallet.js?v=door3';
+  s.onload=()=>{W=window.WeaveWallet;then();};s.onerror=()=>say('The sign-in part did not load. Reload the page.');document.head.appendChild(s);}
+function join(){weave(()=>W.inviteInfo(INVITE).then(i=>{
+  if(!i||!i.found||i.expired||i.spent){say('This invitation has run out or been used. If you joined before, sign in with your account code.');return load();}
+  const name=String(i.forName||'').toLowerCase(),label=i.forLabel||name;
+  $('#body').innerHTML=`<h1>You are invited</h1><p class="lede">Someone in this seed space has let you in. Joining takes a few seconds and needs no password.</p><button id="jn">Join as ${esc(label)}</button><p class="tag" id="jn-e"></p>`;
+  $('#jn').onclick=()=>{$('#jn').disabled=true;$('#jn-e').textContent='Setting up…';
+    W.redeemInvite(INVITE,name,label).then(r=>{history.replaceState(null,'',location.pathname+'?s='+encodeURIComponent(SLUG));
+      if(r&&r.accountCode){$('#body').innerHTML=`<h1>You are in. Keep this code.</h1><p class="lede">It signs you in here on any other device. It is shown only once.</p><p style="font:600 22px ui-monospace,monospace;word-break:break-all">${esc(r.accountCode)}</p><p class="tag">Your name: ${esc(name)}</p><button id="cd">Open the seed space</button>`;
+        $('#cd').onclick=()=>W.login({name,requireCommunity:COM}).then(load);}
+      else return W.login({name,requireCommunity:COM}).then(load);})
+    .catch(e=>{$('#jn').disabled=false;$('#jn-e').textContent='That did not work: '+((e&&e.message)||e)+'. If you already have a Weave sign-in, sign in with your account code instead.';});};
+}).catch(e=>{say(e.message);load();}));}
+function load(){return post('get',{slug:SLUG}).then(render).catch(e=>{$('#body').innerHTML='<h1>Not here</h1><p class="lede">'+esc(e.message)+'</p>';});}
+if(INVITE)join();
+else if(KEY)load();
+else weave(()=>W.check(COM).then(r=>load()).catch(()=>load()));
+</script>
+</body>
+</html>
