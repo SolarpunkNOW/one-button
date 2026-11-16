@@ -380,6 +380,11 @@
   <div class="sheet-body" id="wins-body"></div>
 </div>
 
+<div class="sheet" id="sheet-changes">
+  <div class="sheet-bar"><h2>New changes</h2><button class="sheet-x" data-close>&times;</button></div>
+  <div class="sheet-body" id="changes-body"></div>
+</div>
+
 <div class="sheet" id="sheet-photos">
   <div class="sheet-bar"><h2>Photos</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body" id="photos-body"></div>
@@ -2720,9 +2725,31 @@ window.obBusy=()=>lkLive||intOn;
 
 /* Update signal. /version.json is stamped at every deploy (web: when the page last changed;
  * android: the newest phone build). A page that has been open since before the last deploy
- * offers a refresh; a phone app older than the newest build offers the install file. Shown on
+ * offers the list of new changes; a phone app older than the newest build offers the install file. Shown on
  * the lock screen, the main screen and in Settings, in place of Record a win; checked on load,
  * every ten minutes and when the app returns. */
+/* Changes you pick one at a time. Each new feature Claude builds gets a line here and ships off;
+ * its code asks hasChange('its-id') before it shows. Fixes to something broken skip this list and
+ * are on for everyone. Choices are kept on this device, so each person and device picks its own.
+ * Try it turns a change on until the app is closed; Add keeps it on; Remove turns it off again. */
+const CHANGES=[
+  // {id:'short-name',text:'One line saying what it does.'},
+];
+function hasChange(id){return !!LS.get('ob-changes',{})[id]||(()=>{try{return JSON.parse(sessionStorage.getItem('ob-try')||'[]').includes(id);}catch{return false;}})();}
+function changesNew(){const seen=LS.get('ob-changes-seen',[]);return CHANGES.filter(c=>!seen.includes(c.id));}
+function openChanges(){hideLock();openSheet('#sheet-changes');renderChanges();
+  LS.set('ob-changes-seen',CHANGES.map(c=>c.id));checkUpdate();}
+function renderChanges(){const box=$('#changes-body'),on=LS.get('ob-changes',{}),fresh=changesNew().map(c=>c.id);
+  box.innerHTML=CHANGES.length?CHANGES.slice().reverse().map(c=>`<div class="note-item"><div class="ntext">${escapeHtml(c.text)}<div class="nmeta">${on[c.id]?'added':hasChange(c.id)?'trying it':fresh.includes(c.id)?'new':'off'}</div>
+    <div class="iv-row">${on[c.id]?`<button class="tbtn" data-cx="${c.id}">Remove</button>`:`<button class="tbtn" data-ct="${c.id}">Try it</button><button class="tbtn" data-ca="${c.id}">Add</button>`}</div></div></div>`).join('')
+    :'<div class="empty">Nothing new to choose yet. Fixes turn on by themselves.</div>';
+  // Each switch takes effect on a fresh page, so the page reloads and comes back to this list.
+  const redo=()=>{location.hash='changes';location.reload();};
+  box.querySelectorAll('[data-ct]').forEach(b=>b.onclick=()=>{let t=[];try{t=JSON.parse(sessionStorage.getItem('ob-try')||'[]');}catch{}
+    t.push(b.dataset.ct);try{sessionStorage.setItem('ob-try',JSON.stringify(t));}catch{}redo();});
+  box.querySelectorAll('[data-ca]').forEach(b=>b.onclick=()=>{const o=LS.get('ob-changes',{});o[b.dataset.ca]=Date.now();LS.set('ob-changes',o);redo();});
+  box.querySelectorAll('[data-cx]').forEach(b=>b.onclick=()=>{const o=LS.get('ob-changes',{});delete o[b.dataset.cx];LS.set('ob-changes',o);
+    try{sessionStorage.setItem('ob-try',JSON.stringify(JSON.parse(sessionStorage.getItem('ob-try')||'[]').filter(x=>x!==b.dataset.cx)));}catch{}redo();});}
 let VER_SEEN=null;
 function checkUpdate(){
   fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{
@@ -2734,7 +2761,9 @@ function checkUpdate(){
     // older builds go straight to the file on GitHub in the browser, then open the download.
     if(mine&&v.android>mine){text='Build '+v.android+' is ready, you have '+mine+'. Tap to install.';
       go=()=>{if(NATIVE.installUpdate){NATIVE.installUpdate();showToast('Downloading build '+v.android+'. The installer opens when it is down.');}else location.href=v.apk||'https://github.com/jayfcousins-cell/one-button-android/releases/latest';};}
-    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='A newer One Button page is live. Tap to reload.';go=()=>location.reload();}
+    // A newer page only brings fixes and switched-off changes, so loading it is safe; it opens on the list.
+    else if(VER_SEEN&&v.web&&v.web!==VER_SEEN){text='One Button has new changes. Tap to look at them.';go=()=>{location.hash='changes';location.reload();};}
+    else if(changesNew().length){const n=changesNew().length;text=n+' new change'+(n>1?'s':'')+' to look at.';go=openChanges;}
     for(const b of [$('#lk-upd'),$('#main-upd'),$('#set-upd')]){if(!b)continue;b.textContent=text;b.hidden=!text;b.classList.toggle('hidden',!text);b.onclick=go;}
     renderWins();
   }).catch(()=>{});
@@ -2763,6 +2792,7 @@ function boot(){
   statusEl.textContent='tap to speak';
   resetIdle();
   if(/[?&]lock=1/.test(location.search)) showLock();
+  if(location.hash==='#changes'){history.replaceState(null,'',location.pathname+location.search);openChanges();}
   syncNow();
   renderClaude();
   setTimeout(celebrate,1500);
