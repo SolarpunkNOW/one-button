@@ -474,11 +474,12 @@
 </div>
 
 <div class="sheet" id="sheet-ivs">
-  <div class="sheet-bar"><h2>Interviews</h2><button class="sheet-x" data-close>&times;</button></div>
+  <div class="sheet-bar"><h2>Conversations</h2><button class="sheet-x" data-close>&times;</button></div>
   <div class="sheet-body">
     <div class="addrow" style="margin-bottom:6px"><input id="iv-q" class="full" placeholder="Search everything said, in every conversation" aria-label="Search conversations"><button id="iv-qgo">Search</button></div>
     <div id="iv-qout"></div>
     <div id="sp-wrap" style="display:none"><div class="iv-h" style="margin-top:0">Shared spaces</div><div id="sp-list"></div><div class="iv-h">Recordings</div></div>
+    <div id="iv-webrec" class="iv-row" style="display:none;margin:0 0 12px"><button class="save" id="iv-recgo">Record a conversation</button><span class="nmeta" id="iv-recsay"></span></div>
     <div id="iv-list"></div>
     <p class="note">Kept privately inside One Button until you share or process one. Processed interviews go to your vault, Interviews folder, by themselves when the laptop is on.</p>
   </div>
@@ -2161,7 +2162,7 @@ $('#lk-orb').onclick=()=>{
 /* Interviews (stage 7). Nothing leaves the phone until Jay taps Share or Process. A processed
    interview's note lives on the server until the laptop helper files it into the vault; Ask
    Claude requests wait there for the laptop too. IVS caches what the server last said. */
-if(NATIVE&&NATIVE.listInterviews) $('#open-ivs').style.display='';
+if((NATIVE&&NATIVE.listInterviews)||obKey()) $('#open-ivs').style.display='';
 let IVS=LS.get('ob-ivs',{}), ASKS=LS.get('ob-asks',[]), ivOpen=null, ivFromList=false, ivTimer=null;
 const ivId=name=>String(name).replace(/\.m4a$/,'');
 const ivFiles=()=>{try{return JSON.parse(NATIVE.listInterviews());}catch{return [];}};
@@ -2179,7 +2180,16 @@ function ivSearch(){const q=($('#iv-q').value||'').trim(),out=$('#iv-qout');if(!
 document.addEventListener('click',e=>{if(e.target&&e.target.id==='iv-qgo')ivSearch();});
 document.addEventListener('keydown',e=>{if(e.target&&e.target.id==='iv-q'&&e.key==='Enter')ivSearch();});
 function renderInterviews(){
-  const box=$('#iv-list'); if(!NATIVE||!NATIVE.listInterviews){box.innerHTML='';return;}
+  const box=$('#iv-list');
+  if(!NATIVE||!NATIVE.listInterviews){
+    // iPhone and browsers: the conversations on the server, newest first, each opening its card.
+    $('#iv-webrec').style.display='';
+    const list=Object.values(IVS).filter(s=>s&&s.id&&!String(s.id).startsWith('import-')&&s.status!=='task').sort((a,b)=>(b.created||0)-(a.created||0));
+    box.innerHTML=list.length?'':'<div class="empty" style="padding:14px 0">No conversations yet. Tap Record a conversation, or talk to the big button for over a minute.</div>';
+    for(const s of list){const row=document.createElement('div');row.className='note-item';
+      row.innerHTML=`<div class="ntext">${escapeHtml(s.title||'Conversation')}<div class="nmeta">${ivWhen(s.created||Date.now())}${(s.people||[]).length?' . with '+escapeHtml(s.people.join(', ')):''}${s.status==='working'?' . writing it up':s.status==='error'?' . could not be written up':''}</div></div>`;
+      row.querySelector('.ntext').onclick=()=>openIv(s.id+'.m4a',true);box.appendChild(row);}
+    return;}
   const list=ivFiles();
   if(!list.length){box.innerHTML='<div class="empty" style="padding:14px 0">No interviews yet. Tap the record button three times on the lock screen to start one.</div>';return;}
   box.innerHTML='';
@@ -2214,6 +2224,8 @@ async function ivRefresh(){
       if(say){showToast(say+': '+askWords(a).slice(0,50));try{navigator.vibrate&&navigator.vibrate([90,70,90]);}catch{}}}
     for(const a of ASKS)if(a.kind!=='app'&&a.status==='done'&&doneBefore[a.id]===false&&notes.some(n=>n.ask===a.id)){showToast('Claude answered a task');try{navigator.vibrate&&navigator.vibrate([90,70,90]);}catch{}}
     LS.set('ob-ivs',IVS); LS.set('ob-asks',ASKS); ivAuto(); fileByPerson();
+    // The conversations list (iPhone version) draws from what just arrived.
+    if($('#sheet-ivs')&&$('#sheet-ivs').classList.contains('open'))renderInterviews();
     if(ASKS.some(a=>a.status==='done'&&!was.has(a.id))){showToast('Claude answered');try{navigator.vibrate&&navigator.vibrate(80);}catch{}}
     renderClaude();
     if($('#sheet-ivs').classList.contains('open'))renderInterviews();
@@ -2235,7 +2247,7 @@ function renderIv(){
   const id=ivId(name), s=IVS[id]||{}, f=ivFiles().find(x=>x.name===name)||{ts:Date.now(),size:0}, b=$('#iv-body');
   $('#iv-title').textContent=s.title||'Interview';
   let h=`<p class="iv-meta">${ivWhen(f.ts)} . ${(f.size/1048576).toFixed(1)} MB${s.people&&s.people.length?' . with '+escapeHtml(s.people.join(', ')):''}</p>
-    <div class="iv-row">${s.status==='done'?'<button class="save" id="iv-toshare">Share into a space</button>':''}<button class="tbtn" id="iv-share">Send the recording file</button></div>`;
+    <div class="iv-row">${s.status==='done'?'<button class="save" id="iv-toshare">Share into a space</button>':''}${NATIVE&&NATIVE.shareInterview?'<button class="tbtn" id="iv-share">Send the recording file</button>':''}</div>`;
   // Who it was with: the note step only names people it hears in the conversation, so this is
   // where Jay confirms or corrects it. Recent partners come first; a change refiles it on the laptop.
   if(s.status==='done'){
@@ -2304,7 +2316,7 @@ function renderIv(){
     h+=`<p class="note">${s.collected?'In your vault: '+escapeHtml(s.folder||'Interviews'):'Goes to your vault, Interviews folder, next time your laptop is on.'}</p>`;
   }
   b.innerHTML=h;
-  $('#iv-share').onclick=()=>NATIVE&&NATIVE.shareInterview(name);
+  {const sh=$('#iv-share');if(sh)sh.onclick=()=>NATIVE&&NATIVE.shareInterview(name);}
   b.querySelectorAll('[data-spopen]').forEach(x=>x.onclick=e=>{e.preventDefault();spOpen(spOf(x.dataset.spopen));});
   b.querySelectorAll('[data-spsend]').forEach(x=>x.onclick=e=>{e.preventDefault();spSendPerson(x.dataset.spsend,id,x);});
   const ts2=$('#iv-toshare'); if(ts2) ts2.onclick=()=>{const x=$('#iv-sharebox');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});};
@@ -2444,6 +2456,21 @@ async function spCode(sp,btn){
   if(btn)btn.disabled=false;
 }
 
+// Recording a conversation without the phone app (iPhone): until Stop, always written up as a
+// conversation however short, with the screen kept awake (a locked iPhone stops the recording).
+let WEBREC=null;
+async function webConversation(){const go=$('#iv-recgo'),say=$('#iv-recsay');
+  if(WEBREC){WEBREC.stop();return;}
+  let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true});}catch(e){say.textContent='The microphone was not allowed: Settings, Safari, Microphone.';return;}
+  const mime=pickMime(),mr=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream),chunks=[],began=Date.now();
+  let lock=null;try{lock=await navigator.wakeLock.request('screen');}catch(e){}
+  mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  mr.onstop=()=>{stream.getTracks().forEach(x=>x.stop());try{lock&&lock.release();}catch(e){}clearInterval(WEBREC&&WEBREC.tick);WEBREC=null;go.textContent='Record a conversation';
+    const blob=new Blob(chunks,{type:mr.mimeType||mime||'audio/mp4'});say.textContent='Sending it to be written up…';
+    ivUploadWeb(blob,began).then(ok=>{say.textContent=ok?'':'Not sent yet: tap the yellow bar to try again.';renderInterviews();});};
+  mr.start(1000);go.textContent='Stop and write it up';
+  WEBREC={stop:()=>{try{mr.stop();}catch(e){}},tick:setInterval(()=>{const s=Math.round((Date.now()-began)/1000);say.textContent='Recording '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+'. Keep this screen open.';},1000)};}
+document.addEventListener('click',e=>{if(e.target&&e.target.id==='iv-recgo')webConversation();});
 // A long recording made with the button (not the phone's interview recorder) goes up as it is.
 async function ivUploadWeb(blob,ts){
   const id='interview-'+new Date(ts).toISOString().slice(0,16).replace(/[:T]/g,'-')+'-web',name=id+'.m4a';
@@ -2452,8 +2479,9 @@ async function ivUploadWeb(blob,ts){
       {method:'POST',headers:{...obHeaders(),'Content-Type':blob.type||'audio/webm'},body:blob});
     const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||r.status);
     IVS[id]={...IVS[id],...d};LS.set('ob-ivs',IVS);openIv(name,false);return true;}
-  catch(e){IVS[id]={...IVS[id],status:'error'};LS.set('ob-ivs',IVS);showToast('Could not send the recording, saved it to your downloads');
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=id+(/mp4/.test(blob.type)?'.m4a':'.webm');a.click();return false;}}
+  catch(e){IVS[id]={...IVS[id],status:'error'};LS.set('ob-ivs',IVS);
+    // Keep the recording in this session and offer it again; nothing is lost while the app stays open.
+    barNotice('The recording was not sent ('+(e.message||'no connection')+'). Tap to try again.',()=>ivUploadWeb(blob,ts),0);return false;}}
 function ivProcess(name,ts,quiet){
   if(!(NATIVE&&NATIVE.processInterview)){if(!quiet)showToast('Update the app to process interviews');return;}
   const id=ivId(name); IVS[id]={...(IVS[id]||{}),status:'working',since:Date.now()}; LS.set('ob-ivs',IVS);
