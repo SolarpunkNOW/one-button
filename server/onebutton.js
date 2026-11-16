@@ -1490,6 +1490,117 @@ async function spPresent(req, body, visitor) {
 }
 // Ask the space: an answer from the conversations' words (private stretches left out), each claim
 // pointing at the conversation and second it rests on. Only for the people in the space.
+/* ---------- Asking across every shared space ----------
+ * One question over all of the asker's own conversation spaces. The question is widened first
+ * (the words people actually say about it), the matching moments are gathered from every space
+ * with a line either side, and the answer comes back as findings and possible projects, each
+ * pointing at its moment. Kept, so a question can be picked from again later. Private passages
+ * are never read. */
+const ASKALL_SYS = `You answer a question from excerpts of many conversations, held in different shared spaces. Each excerpt line starts with a marker like [k3@431]. Reply with JSON only:
+{"answer": "a plain answer of 3 to 8 sentences; after each claim put the marker of the line it rests on, exactly as written, like [k3@431]",
+ "findings": [{"text": "one sentence that stands on its own for someone who was not there", "ref": "k3@431", "quote": "the short word-for-word line it rests on"}],
+ "projects": [{"name": "2 to 6 words", "about": "one sentence on what it would do", "refs": ["k3@431"]}]}
+Findings: every distinct point that answers the question, up to 12, strongest first, each from one line. Projects: up to 5 things worth doing that the conversations point at, none if nothing does. Only what the excerpts say; if they say nothing on it, say so and give no findings. Never anything negative or reflective about any person's personality, character or state of mind. Plain English, no em dashes.`;
+const ASK_STOP = new Set("what did the and about said say have has was were for with any anything that this our we you they how why when where who which refer refers referring mention mentions mentioned talk talked talking there their them from into does tell all".split(" "));
+async function widen(q, hint) {
+  const own = WORDS(q).filter((w) => !ASK_STOP.has(w));
+  try {
+    const out = await chat({ messages: [{ role: "system", content: 'List words and short phrases people say in conversation when they talk about the subject of this question: its own key words, other names for it, and closely related ideas. Reply with JSON only: {"words": ["..."]} with 8 to 20 lowercase items.' }, { role: "user", content: q + (hint ? "\n\nThese conversations run on topics like: " + hint + ". Read the question the way these people would mean it." : "") }] }, 400);
+    const w = parseJSON(JSON.parse(out.text).choices[0].message.content).words;
+    return [...new Set([...own, ...(Array.isArray(w) ? w : []).map((x) => String(x).toLowerCase().trim()).filter((x) => x.length > 2 && !ASK_STOP.has(x))])].slice(0, 30);
+  } catch { return own; }
+}
+const askCol = () => listRef().collection("interrogations");
+// These read across all of Jay's spaces, so only Jay's own key opens them.
+const keyOk = async (req) => { const p = await whoIs(req); return !!(p && p.name === "jay"); };
+async function spAskAll(req, body, visitor) {
+  const q = String(body.q || "").trim().slice(0, 500);
+  if (!q) return [400, { error: "ask a question" }];
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const docs = (await listRef().collection("spaces").get()).docs;
+  const hint = [...new Set(docs.flatMap((s) => (((s.data().added || {}).synth || {}).topics || []).map((x) => x.name)))].slice(0, 30).join(", ");
+  const terms = await widen(q, hint);
+  const hits = (text) => { const s = String(text || "").toLowerCase(), ws = new Set(WORDS(s)); let n = 0; for (const x of terms) if (x.includes(" ") || x.length > 5 ? s.includes(x) : ws.has(x)) n++; return n; };
+  const blocks = [], refs = {};
+  let k = 0;
+  for (const snap of docs) {
+    const slug = snap.id, s = await migrateSpace(slug, snap), d = withAdded(s), people = ((s.data().data || {}).people || []).map((x) => x.name);
+    for (const c of d.convs || []) {
+      const w = await wordsFor(slug, c), segs = (w.segments && w.segments.length) ? w.segments : [[0, String(w.transcript || "")]];
+      const keep = new Set(); let score = hits(c.title) * 3 + hits(c.summary) * 2;
+      segs.forEach(([, x], i) => { const h = hits(x); if (h) { score += h; keep.add(i - 1); keep.add(i); keep.add(i + 1); } });
+      if (!score) continue;
+      const key = "k" + (++k);
+      refs[key] = { slug, space: s.data().name || slug, people, conv: c.id, title: c.title || "Conversation", date: c.date || "", held: !!c.held };
+      const idx = [...keep].filter((i) => i >= 0 && i < segs.length).sort((a, b) => a - b).slice(0, 80);
+      const lines = (idx.length ? idx : [0]).map((i) => `[${key}@${segs[i][0]}] ${String(segs[i][1]).slice(0, 600)}`);
+      blocks.push({ score, text: `## ${refs[key].space}: ${refs[key].title} (${refs[key].date})\nSummary: ${String(c.summary || "").slice(0, 600)}\n${lines.join("\n")}` });
+    }
+  }
+  if (!blocks.length) return [200, { id: "", q, terms, answer: "Nothing in your shared conversations touches this yet.", findings: [], projects: [], refs: {} }];
+  blocks.sort((a, b) => b.score - a.score);
+  let ctx = ""; for (const b of blocks) { if (ctx.length + b.text.length > 90000) continue; ctx += b.text + "\n\n"; }
+  const out = await chat({ messages: [{ role: "system", content: ASKALL_SYS }, { role: "user", content: `Question: ${q}\n\n${ctx}` }] }, 4000);
+  let got = null;
+  try { got = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!got) return [502, { error: "no answer came back this time; ask again" }];
+  const ref = (r) => { const m = String(r || "").replace(/[\[\]]/g, "").match(/^(k\d+)@(\d+(?:\.\d+)?)$/); return m && refs[m[1]] ? { k: m[1], at: Math.round(+m[2]) } : null; };
+  const findings = (Array.isArray(got.findings) ? got.findings : []).slice(0, 12).map((f, i) => ({ id: "f" + i, text: String((f && f.text) || "").slice(0, 400), quote: String((f && f.quote) || "").slice(0, 300), ref: ref(f && f.ref) })).filter((f) => f.text);
+  const projects = (Array.isArray(got.projects) ? got.projects : []).slice(0, 5).map((x, i) => ({ id: "p" + i, name: String((x && x.name) || "").slice(0, 120), about: String((x && x.about) || "").slice(0, 600), refs: (Array.isArray(x && x.refs) ? x.refs : []).map(ref).filter(Boolean).slice(0, 6) })).filter((x) => x.name);
+  const used = new Set([...findings.map((f) => f.ref && f.ref.k), ...projects.flatMap((x) => x.refs.map((r) => r.k))].filter(Boolean));
+  const res = { q, terms, answer: String(got.answer || "").slice(0, 6000), findings, projects, refs: Object.fromEntries(Object.entries(refs).filter(([key]) => used.has(key) || String(got.answer || "").includes(key + "@"))), at: Date.now() };
+  const id = "q" + res.at.toString(36);
+  await askCol().doc(id).set(res);
+  return [200, { id, ...res }];
+}
+async function spAskAllList() {
+  const got = (await askCol().orderBy("at", "desc").limit(20).get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+  return [200, { asks: got }];
+}
+// Chosen findings and projects go into a space (and a subspace of it, by topic). Anything that
+// came from another space, or from a held conversation, arrives held: only the host sees it
+// until the host shares it with the space.
+async function spPlace(req, body, visitor) {
+  const slug = String(body.slug || ""), topic = String(body.topic || "").slice(0, 40), qid = String(body.ask || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const a0 = (await askCol().doc(qid).get()).data();
+  if (!a0) return [404, { error: "that question is gone; ask again" }];
+  const pick = new Set((Array.isArray(body.pick) ? body.pick : []).map(String)), at = Date.now(), name = (await spaceRef(slug).get()).data().name || slug;
+  const src = (r) => (r && a0.refs[r.k]) || null;
+  const heldOf = (rs) => rs.some((r) => { const x = src(r); return !x || x.slug !== slug || x.held; }) ? "only you see this until you share it" : "";
+  const source = (r) => { const x = src(r); return x ? { space: x.space, slug: x.slug, title: x.title, date: x.date, at: r.at, conv: x.conv } : null; };
+  const docs = a0.findings.filter((f) => pick.has(f.id)).map((f, i) => {
+    const same = f.ref && src(f.ref) && src(f.ref).slug === slug;
+    return { id: "g" + (at + i).toString(36), kind: "Finding", title: f.text.split(/\s+/).slice(0, 8).join(" "), body: f.text, quote: f.quote, when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+      from: same ? src(f.ref).conv : "", topic, ask: a0.q, source: source(f.ref), held: heldOf(f.ref ? [f.ref] : [null]), by: "jay", at: at + i,
+      ...(same ? { prov: { conv: src(f.ref).conv, at: f.ref.at, quote: f.quote } } : {}) };
+  });
+  const projects = a0.projects.filter((x) => pick.has(x.id)).map((x, i) => {
+    const mine = x.refs.filter((r) => src(r) && src(r).slug === slug).map((r) => src(r).conv);
+    return { id: "g" + (at + 50 + i).toString(36), name: x.name, status: "Idea", about: x.about, next: "", convs: [...new Set(mine)], topic, ask: a0.q,
+      sources: x.refs.map(source).filter(Boolean), held: heldOf(x.refs.length ? x.refs : [null]), by: "jay", at: at + 50 + i };
+  });
+  if (!docs.length && !projects.length) return [400, { error: "choose at least one" }];
+  await pushAdded(slug, { docs, projects });
+  return [200, { ok: true, space: name, findings: docs.length, projects: projects.length, held: [...docs, ...projects].filter((x) => x.held).length }];
+}
+// The host shares something that arrived held.
+async function spRelease(req, body, visitor) {
+  const slug = String(body.slug || ""), id = String(body.id || "");
+  if (!SLUG_RE.test(slug) || !id) return [400, { error: "bad request" }];
+  if (!(await keyOk(req))) return [403, { error: "only the host can share it" }];
+  const ref = spaceRef(slug);
+  const done = await admin.firestore().runTransaction(async (tx) => {
+    const s = await tx.get(ref), a = { ...ADDED, ...(s.data().added || {}) };
+    let hit = false;
+    for (const k of ["docs", "projects", "tasks"]) a[k] = (a[k] || []).map((x) => (x.id === id && x.held ? ((hit = true), { ...x, held: "" }) : x));
+    if (hit) tx.set(ref, { added: a, updated: Date.now() }, { merge: true });
+    return hit;
+  });
+  return done ? [200, { ok: true }] : [404, { error: "nothing held with that id" }];
+}
+
 async function spAsk(req, body, visitor) {
   const slug = String(body.slug || ""), q = String(body.q || "").trim().slice(0, 500);
   if (!SLUG_RE.test(slug) || !q) return [400, { error: "ask a question" }];
@@ -2345,7 +2456,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2357,6 +2468,7 @@ exports.oneButton = onRequest(
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
         present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
+        askall: () => spAskAll(req, body, visitor), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
         synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor),
         mentions: () => spMentions(req, body, visitor), mentionset: () => spMentionSet(req, body, visitor) }[sp[1]];
       try { send(await fn()); }

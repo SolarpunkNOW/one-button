@@ -138,7 +138,10 @@
   <h2>Ask this space</h2>
   <p class="lede">A question about anything said here. The answer points at the moments it rests on. Passages marked private are never used.</p>
   <div class="row"><input id="ask-q" style="flex:1;min-width:180px;font:16px Inter,sans-serif;padding:10px;border:1px solid var(--ink)" placeholder="What did we say about pensions?" aria-label="Ask this space"><button id="ask-go">Ask</button></div>
+  <div class="row hidden" id="ask-where" style="margin:8px 0 0"><span class="tag">Ask</span><button class="on" data-aw="here">This space</button><button data-aw="all">All my shared conversations</button></div>
+  <div id="ask-earlier"></div>
   <div id="ask-out"></div>
+  <div id="found-wrap" class="hidden"><h2>Found by asking</h2><p class="lede">Points picked from answers and put here, each with the conversation it came from.</p><div id="found"></div></div>
 
   <h2>People mentioned</h2>
   <p class="lede">Every line that names someone in your network. Sensitive ones come first. <b>Fine</b> stops showing it. <b>Keep private</b> keeps it in this space and out of anything made from it. <b>Remove</b> takes the words out of the transcript for good.</p>
@@ -239,7 +242,7 @@ function topicView(D,tp){const w=(tp.words||[]).map(x=>String(x).toLowerCase()).
   const projects=D.projects.filter(p=>p.topic===tp.slug||hit(p.name,p.about,p.next)||(p.convs||[]).some(c=>ids.has(c)));
   const pids=new Set(projects.map(p=>p.id));
   return {...D,convs,projects:projects.map(p=>({...p,convs:(p.convs||[]).filter(c=>ids.has(c))})),tasks:D.tasks.filter(x=>ids.has(x.from)||pids.has(x.project)||hit(x.text)),
-    marks:(D.marks||[]).filter(m=>ids.has(m.conv)),docs:D.docs.filter(d=>!d.from||ids.has(d.from)||(d.convs||[]).some(c=>ids.has(c))),links:(D.links||[]).filter(l=>pids.has(l[0])&&pids.has(l[1])),topicIds:ids};}
+    marks:(D.marks||[]).filter(m=>ids.has(m.conv)),docs:D.docs.filter(d=>d.kind==='Finding'?(d.topic===tp.slug||(!d.topic&&ids.has(d.from))):(d.topic===tp.slug||!d.from||ids.has(d.from)||(d.convs||[]).some(c=>ids.has(c)))),links:(D.links||[]).filter(l=>pids.has(l[0])&&pids.has(l[1])),topicIds:ids};}
 function render(D){
 const TOPIC=new URLSearchParams(location.search).get('topic');
 const FULL=D;
@@ -333,7 +336,10 @@ $('#projects').innerHTML=D.projects.map(p=>`<div class="box proj-card" id="proj-
   <div class="next"><span class="tag">Next step</span><br>${esc(p.next)}</div>
   ${D.tasks.some(t=>t.project===p.id)?`<div class="who" style="margin-top:10px"><span class="tag">To do in this project</span>${D.tasks.filter(t=>t.project===p.id).map(t=>`<label class="task"><input type="checkbox" ${t.done?'checked':''} disabled><span>${t.done?'<s>':''}${esc(t.text)}${t.done?'</s>':''}<span class="tag">${t.due?esc(t.due):''}</span></span></label>`).join('')}</div>`:''}
   ${p.convs.length?`<p class="tag" style="margin:10px 0 0">From: ${p.convs.map(c=>esc(conv(c).title)).join(' . ')}</p>`:''}
+  ${(p.sources||[]).length?`<p class="tag" style="margin:10px 0 0;text-transform:none;letter-spacing:0">Rests on: ${p.sources.map(s=>esc(s.space)+': '+esc(s.title)).join(' . ')}</p>`:''}
+  ${ACT&&ACT.key&&p.held&&p.ask?`<div class="row"><button data-release="${esc(p.id)}">Share with ${esc((D.people||[]).filter(x=>x.id!=='jay').map(x=>x.name).join(' and ')||'the space')}</button></div>`:''}
   ${ACT&&!p.held?`<div class="row"><button class="link" data-projseed="${esc(p.id||p.name)}">Propose as a seed</button></div>`:''}</div>`).join('');
+document.querySelectorAll('[data-release]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('release',{slug:SLUG,id:b.dataset.release}).then(()=>{say('Shared with the space.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
 
 const groups=[['both','Together'],[D.viewer,'You said you would'],['jay','Jay is doing']];
 $('#tasks').innerHTML=groups.map(([who,label])=>{const ts=D.tasks.filter(t=>t.who===who&&!t.project); if(!ts.length)return '';
@@ -453,7 +459,42 @@ document.querySelectorAll('[data-projseed]').forEach(b=>b.onclick=()=>{b.disable
 // Ask, and the marked passages: only for the people in this space.
 $('#workbench').classList.toggle('hidden',!ACT);
 const askLinks=s=>esc(s).replace(/\[(c\d+|m[a-z0-9]+)@(\d+(?:\.\d+)?)\]/g,(x,c,at)=>`<button class="link" data-prov="${c}" data-at="${Math.round(+at)}">${esc(conv(c).title||c)} ${mmss(Math.round(+at))}</button>`);
-const doAsk=()=>{const q=$('#ask-q').value.trim();if(!q)return;$('#ask-out').innerHTML='<p class="tag">Reading the conversations…</p>';
+/* Asking across every shared space (host only): the answer, then findings and possible projects to
+ * choose from, and where to put them: this space, or one of its subspaces. Anything from another
+ * space arrives held until the host shares it here. */
+const HOST=!!(ACT&&ACT.key)&&ME==='jay';
+$('#ask-where').classList.toggle('hidden',!HOST);
+if(HOST&&!window.ASKW){window.ASKW=TOPIC?'all':'here';}
+document.querySelectorAll('[data-aw]').forEach(b=>{b.classList.toggle('on',b.dataset.aw===window.ASKW);b.onclick=()=>{window.ASKW=b.dataset.aw;document.querySelectorAll('[data-aw]').forEach(x=>x.classList.toggle('on',x===b));
+  $('#ask-q').placeholder=window.ASKW==='all'?'What have we said about flow funding, anywhere?':'What did we say about pensions?';};});
+if(TOPIC&&!$('#ask-q').value){const tp=topicOf(FULL,TOPIC);$('#ask-q').placeholder='What have we said about '+tp.name+'?';}
+const topicsHere=((FULL.synth&&FULL.synth.topics)||[]);
+const refLabel=(A,k,at)=>{const r=(A.refs||{})[k];if(!r)return '';return r.slug===SLUG?`<button class="link" data-prov="${esc(r.conv)}" data-at="${at}">${esc(r.title)} ${mmss(at)}</button>`:`<span class="tag" style="text-transform:none;letter-spacing:0">${esc(r.space)}: ${esc(r.title)}, ${mmss(at)}</span>`;};
+function showAskAll(A){
+  const ans=esc(A.answer).replace(/\[(k\d+)@(\d+(?:\.\d+)?)\]/g,(x,k,at)=>' '+refLabel(A,k,Math.round(+at)));
+  const away=r=>{const x=r&&(A.refs||{})[r.k];return !x||x.slug!==SLUG||x.held;};
+  const guess=topicsHere.find(tp=>TOPIC?tp.slug===TOPIC:(A.terms||[]).some(w=>tp.name.toLowerCase().includes(w)||(tp.words||[]).some(y=>y.includes(w)||w.includes(y))));
+  $('#ask-out').innerHTML=`<div class="box"><span class="tag">Across all your shared conversations${(A.terms||[]).length?' . looked for: '+esc(A.terms.slice(0,12).join(', ')):''}</span><div style="white-space:pre-wrap;margin-top:8px">${ans}</div></div>
+    ${(A.findings||[]).length||(A.projects||[]).length?`<div class="box"><b>Choose what to put in this space</b>
+      ${(A.findings||[]).map(f=>`<label class="task" style="display:flex;gap:10px;align-items:flex-start;margin:10px 0"><input type="checkbox" data-pk="${esc(f.id)}" style="width:22px;height:22px;flex:none;margin-top:3px"><span>${esc(f.text)}<br>${f.ref?refLabel(A,f.ref.k,f.ref.at):''}${away(f.ref)?' <span class="tag">arrives held: only you see it until you share it</span>':''}</span></label>`).join('')}
+      ${(A.projects||[]).length?`<p class="tag" style="margin:14px 0 0">Projects these point at</p>`+A.projects.map(x=>`<label class="task" style="display:flex;gap:10px;align-items:flex-start;margin:10px 0"><input type="checkbox" data-pk="${esc(x.id)}" style="width:22px;height:22px;flex:none;margin-top:3px"><span><b>${esc(x.name)}</b><br>${esc(x.about)}${x.refs.some(away)?' <span class="tag">arrives held</span>':''}</span></label>`).join(''):''}
+      <div class="row" style="margin-top:12px;align-items:center"><span class="tag">Into</span><select id="pk-where" style="font:15px Inter,sans-serif;padding:8px;border:1px solid var(--ink);max-width:70%"><option value="">The whole space</option>${topicsHere.map(tp=>`<option value="${esc(tp.slug)}" ${guess&&guess.slug===tp.slug?'selected':''}>Subspace: ${esc(tp.name)}</option>`).join('')}</select></div>
+      <div class="row"><button id="pk-go">Put the chosen ones here</button><span class="tag" id="pk-say"></span></div></div>`:''}`;
+  wireProv();
+  const go=$('#pk-go');if(go)go.onclick=()=>{const pick=[...document.querySelectorAll('[data-pk]:checked')].map(x=>x.dataset.pk);if(!pick.length){$('#pk-say').textContent='Tick at least one first.';return;}
+    go.disabled=true;actCall('place',{slug:SLUG,ask:A.id,pick,topic:$('#pk-where').value}).then(r=>{
+      $('#pk-say').textContent=`Put in: ${r.findings} finding${r.findings===1?'':'s'}, ${r.projects} project${r.projects===1?'':'s'}${r.held?'. '+r.held+' held until you share '+(r.held===1?'it':'them'):''}.`;
+      document.querySelectorAll('[data-pk]:checked').forEach(x=>{x.checked=false;x.disabled=true;});go.disabled=false;if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});})
+      .catch(e=>{go.disabled=false;$('#pk-say').textContent=e.message;});};}
+let ASKED=window.ASKED||null;
+function loadAsked(){if(!HOST)return;actCall('asked',{slug:SLUG}).then(r=>{ASKED=window.ASKED=r.asks||[];drawAsked();}).catch(()=>{});}
+function drawAsked(){const a=(ASKED||[]).slice(0,8);$('#ask-earlier').innerHTML=HOST&&a.length?`<details style="margin:8px 0"><summary class="tag" style="cursor:pointer">Earlier questions across your spaces (${a.length})</summary><div class="row">${a.map((x,i)=>`<button class="link" data-asked="${i}">${esc(x.q)}</button>`).join('')}</div></details>`:'';
+  document.querySelectorAll('[data-asked]').forEach(b=>b.onclick=()=>{const x=a[+b.dataset.asked];$('#ask-q').value=x.q;showAskAll(x);});}
+if(HOST&&!ASKED)loadAsked();else drawAsked();
+const doAsk=()=>{const q=$('#ask-q').value.trim();if(!q)return;
+  if(HOST&&window.ASKW==='all'){$('#ask-out').innerHTML='<p class="tag">Reading all your shared conversations… this takes up to a minute.</p>';
+    // Straight to the server, not through the website's address, which gives up after a minute.
+    fetch('https://us-central1-canopy-website-ef7a8.cloudfunctions.net/oneButton/api/space/askall',{method:'POST',headers:{'Content-Type':'application/json',...headers()},body:JSON.stringify({slug:SLUG,q})}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'No answer came back');return j;}).then(A=>{showAskAll(A);loadAsked();}).catch(e=>{$('#ask-out').innerHTML='<p class="tag">'+esc(e.message)+'</p>';});return;}$('#ask-out').innerHTML='<p class="tag">Reading the conversations…</p>';
   actCall('ask',{slug:SLUG,q}).then(r=>{$('#ask-out').innerHTML=`<div class="box"><div style="white-space:pre-wrap">${askLinks(r.answer)}</div></div>`;wireProv();}).catch(e=>{$('#ask-out').innerHTML='<p class="tag">'+esc(e.message)+'</p>';});};
 $('#ask-go').onclick=doAsk;$('#ask-q').onkeydown=e=>{if(e.key==='Enter')doAsk();};
 const MST={waiting:'waiting for a yes',agreed:'agreed by everyone',public:'public',private:'kept private'};
@@ -561,8 +602,15 @@ const sels=document.querySelectorAll('[data-hlto]');
 if(sels.length&&ACT&&ACT.key){post('list',{},headers()).then(l=>{const opts=(l.spaces||[]).filter(s=>s.slug!==SLUG).map(s=>`<option value="${esc(s.slug)}">${esc(s.name)}</option>`).join('');
   sels.forEach(s=>{s.insertAdjacentHTML('beforeend',opts);s.onchange=()=>{if(!s.value)return;s.disabled=true;hlCall('publish',{slug:SLUG,doc:s.dataset.hlto,to:s.value}).then(()=>say('Shared into that space.')).catch(e=>{s.disabled=false;say(e.message);});};});}).catch(()=>{});}
 
+{const fd=D.docs.filter(d=>d.kind==='Finding'),others=(D.people||[]).filter(x=>x.id!==ME).map(x=>x.name).join(' and ')||'the space';
+  $('#found-wrap').classList.toggle('hidden',!fd.length);
+  $('#found').innerHTML=fd.slice().reverse().map(d=>`<div class="box"><span class="tag">${d.source?esc(d.source.space)+': '+esc(d.source.title)+(d.source.date?', '+esc(d.source.date):'')+(d.source.at?' at '+mmss(d.source.at):''):'found by asking'}${d.held?' . only you see this':''}</span>
+    <div style="margin:6px 0">${esc(d.body)}</div>${d.quote?`<div class="q" style="font-style:italic;color:var(--muted)">"${esc(d.quote)}"</div>`:''}${provLine(d)}
+    <p class="tag" style="text-transform:none;letter-spacing:0;margin:6px 0 0">Asked: ${esc(d.ask||'')}</p>
+    ${HOST&&d.held?`<div class="row"><button data-release="${esc(d.id)}">Share with ${esc(others)}</button></div>`:''}</div>`).join('');
+  $('#found').querySelectorAll('[data-release]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('release',{slug:SLUG,id:b.dataset.release}).then(()=>{say('Shared with the space.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});wireProv();}
 $('#distilled').innerHTML=
-  D.docs.filter(d=>!['Highlight','Presentation','Bridge','From another conversation'].includes(d.kind)).map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
+  D.docs.filter(d=>!['Highlight','Presentation','Bridge','From another conversation','Finding'].includes(d.kind)).map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
   `<details class="box" open><summary>Key points</summary><ul class="pts">${D.convs.flatMap(c=>c.points).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></details>`+
   `<details class="box"><summary>Words worth keeping</summary>${D.convs.flatMap(c=>c.quotes.map(q=>`<div class="quote">${esc(q)}<br><span class="tag">${esc(c.title)}</span></div>`)).join('')}</details>`;
 

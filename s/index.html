@@ -95,7 +95,9 @@ function render(d){
     ${M&&off.length?`<h2>Offered, waiting for a member</h2>${off.map(seed).join('')}`:''}
     <h2>Conversations linked in</h2><p class="lede">Parallel conversations on the same topic. Their words stay with the people who had them; only a title and a line or two come here.</p>
     ${d.links.length?d.links.map(l=>`<div class="box"><b>${esc(l.title)}</b> <span class="tag">${esc(l.by)}</span><div style="font-size:15px;color:var(--muted)">${esc(l.summary)}</div></div>`).join(''):'<p class="lede">None yet.</p>'}
-    ${M?`<div class="box"><b>Link one of your conversations</b><input id="lk-t" placeholder="Its title"><textarea id="lk-s" placeholder="A line or two on what it adds here"></textarea><button id="lk-go">Link it</button></div>`:''}
+    ${M?`<div class="box"><b>Link one of your conversations</b><p class="lede" style="margin:4px 0 8px">Pick one from your conversations: the likeliest fits come first. Only its title and a line or two come here, and you can change those before linking.</p>
+      <input id="lk-find" placeholder="Search your conversations" aria-label="Search your conversations"><div id="lk-list"><p class="tag">${KEY?'Loading your conversations…':'Open this from the One Button app to browse your conversations, or type one below.'}</p></div>
+      <input id="lk-t" placeholder="Its title"><textarea id="lk-s" placeholder="A line or two on what it adds here"></textarea><button id="lk-go">Link it</button></div>`:''}
     <h2>Notes</h2>${d.notes.filter(n=>!n.seed).map(n=>`<div class="note">${esc(n.text)} <span class="tag">${esc(n.by)}</span></div>`).join('')||'<p class="lede">None yet.</p>'}
     ${M?`<div class="box"><textarea id="nt" placeholder="Add a note for everyone here"></textarea><button id="nt-go">Add the note</button></div>`:''}
     ${M&&(d.waitingFromParent||[]).length?`<h2>Members who have not opened it yet</h2><p class="lede">They are members already, through the conversations this grew from. Send them the link; it opens with their One Button, or their sign-in for that space.</p>
@@ -117,6 +119,7 @@ function map(d,pub){const svg=$('#map'),W=720,NS='http://www.w3.org/2000/svg',co
   pub.forEach((s,i)=>{const j=convs.indexOf(s.convTitle);if(j>=0)el('path',{d:`M250,${sy(i)} C360,${sy(i)} 360,${sy(j)} 470,${sy(j)}`,stroke:'#1A1A1A','stroke-opacity':.3,fill:'none'});});
   pub.forEach((s,i)=>{el('rect',{x:10,y:sy(i)-12,width:240,height:24,fill:'#E6FF00',stroke:'#1A1A1A','stroke-width':.8});const t=el('text',{x:18,y:sy(i)+4});t.textContent=s.title.length>34?s.title.slice(0,33)+'…':s.title;});
   cl.forEach((c,j)=>{el('circle',{cx:478,cy:sy(j),r:6,fill:c.kind==='c'?'#1A1A1A':'#FFFFFF',stroke:'#1A1A1A'});const t=el('text',{x:492,y:sy(j)+4});t.textContent=(c.t.length>36?c.t.slice(0,35)+'…':c.t)+(c.kind==='l'?' (linked)':'');});}
+let LK_IV='';
 function wire(d){
   const re=()=>load();
   const on=(id,f)=>{const e=$(id);if(e)e.onclick=f;};
@@ -124,7 +127,21 @@ function wire(d){
   document.querySelectorAll('[data-bring]').forEach(b=>b.onclick=()=>{b.disabled=true;post('bring',{slug:SLUG,seed:b.dataset.bring}).then(r=>{say(r.now?'In the seed space now.':'Set: it comes here by itself on the last yes.');re();}).catch(e=>{b.disabled=false;say(e.message);});});
   document.querySelectorAll('[data-copylink]').forEach(b=>b.onclick=()=>{const u=location.origin+location.pathname+'?s='+encodeURIComponent(SLUG);try{navigator.clipboard.writeText(u).then(()=>{b.textContent='Copied';},()=>say(u));}catch(e){say(u);}});
   on('#optin',()=>post('optin',{slug:SLUG,show:!d.me.show}).then(re).catch(e=>say(e.message)));
-  on('#lk-go',()=>post('link',{slug:SLUG,title:$('#lk-t').value,summary:$('#lk-s').value}).then(()=>{say('Linked.');re();}).catch(e=>say(e.message)));
+  on('#lk-go',()=>post('link',{slug:SLUG,title:$('#lk-t').value,summary:$('#lk-s').value,iv:LK_IV}).then(()=>{say('Linked.');LK_IV='';re();}).catch(e=>say(e.message)));
+  // Browse instead of remembering: the member's own conversations, ranked by how much they share
+  // with this seed space (its name, what it is about, its seeds and notes), already linked ones left out.
+  if($('#lk-list')&&KEY){const base=API.replace(/\/ss\/$/,'/');
+    const topicWords=new Set((d.name+' '+(d.about||'')+' '+(d.words||[]).join(' ')+' '+(d.seeds||[]).map(s=>s.title+' '+(s.about||'')).join(' ')).toLowerCase().replace(/[^a-z0-9 ]+/g,' ').split(/\s+/).filter(w=>w.length>3));
+    const linked=new Set((d.links||[]).map(l=>l.iv).filter(Boolean)),linkedT=new Set((d.links||[]).map(l=>l.title));
+    const draw=list=>{const q=($('#lk-find').value||'').toLowerCase().trim();
+      const shown=list.filter(c=>!q||(c.title+' '+c.summary+' '+(c.people||[]).join(' ')).toLowerCase().includes(q)).slice(0,q?40:12);
+      $('#lk-list').innerHTML=shown.length?shown.map((c,i)=>`<div class="box" style="margin:6px 0;padding:10px 12px;cursor:pointer" data-lkpick="${i}"><b>${esc(c.title)}</b> <span class="tag">${esc(c.when)}${(c.people||[]).length?' . with '+esc(c.people.join(', ')):''}${c.score>1&&!q?' . likely fit':''}</span><div style="font-size:14px;color:var(--muted)">${esc(c.summary.slice(0,160))}</div></div>`).join(''):'<p class="tag">No conversation matches that.</p>';
+      document.querySelectorAll('[data-lkpick]').forEach(x=>x.onclick=()=>{const c=shown[+x.dataset.lkpick];LK_IV=c.id;$('#lk-t').value=c.title;$('#lk-s').value=c.summary.split(/(?<=[.!?])\s+/).slice(0,2).join(' ');$('#lk-t').scrollIntoView({behavior:'smooth',block:'center'});});};
+    fetch(base+'interview/list',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':KEY},body:'{}'}).then(r=>r.json()).then(r=>{
+      const list=(r.interviews||[]).filter(c=>c.status==='done'&&c.title&&!linked.has(c.id)&&!linkedT.has(c.title)).map(c=>{const txt=(c.title+' '+(c.summary||'')+' '+(c.points||[]).join(' ')).toLowerCase();let score=0;topicWords.forEach(w=>{if(txt.includes(w))score++;});
+        return {id:c.id,title:c.title,summary:String(c.summary||''),people:c.people||[],created:c.created||0,when:new Date(c.created||0).toLocaleDateString('en-GB',{day:'numeric',month:'short'}),score};})
+        .sort((a,b)=>(b.score>1)-(a.score>1)||b.score-a.score||b.created-a.created);
+      draw(list);$('#lk-find').oninput=()=>draw(list);}).catch(()=>{$('#lk-list').innerHTML='<p class="tag">Could not load your conversations. Type one below.</p>';});}
   on('#nt-go',()=>post('note',{slug:SLUG,text:$('#nt').value}).then(re).catch(e=>say(e.message)));
   on('#iv-go',()=>post('invite',{slug:SLUG,name:$('#iv-n').value}).then(r=>{$('#iv-out').innerHTML=`<p>Send this to ${esc(r.name)}. It works once: <a href="${esc(r.link)}">${esc(r.link)}</a></p>`;}).catch(e=>say(e.message)));
   on('#rq-go',()=>post('request',{slug:SLUG,name:$('#rq-n').value,why:$('#rq-w').value,contact:$('#rq-c').value}).then(()=>{say('Asked. Any member can let you in and send you a link.');}).catch(e=>say(e.message)));
