@@ -404,7 +404,8 @@
     <button class="save" id="set-save">Save</button>
     <p class="note">Off: the lock screen shows only how many tasks are open.</p>
     <div style="height:26px"></div>
-    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What One Button can do</button></div>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What One Button can do</button><button class="tbtn" id="link-device">Link another device</button></div>
+    <p class="note hidden" id="link-note"></p>
     <button class="lk-upd hidden" id="set-upd" hidden style="margin:0 0 18px"></button>
     <label class="set-h">My places</label>
     <div id="places-list"></div>
@@ -2589,8 +2590,20 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdat
 function boot(){
   checkUpdate();
   $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent='What One Button can do';$('#sp-frame').src='/features.html';};
+  // Link the laptop or another phone: one link, used once, no key typed anywhere.
+  $('#link-device').onclick=async()=>{const b=$('#link-device'),n=$('#link-note');b.disabled=true;n.classList.remove('hidden');n.textContent='Making the link…';
+    try{const r=await fetch(API+'/api/person/link',{method:'POST',headers:obHeaders(),body:JSON.stringify({device:'browser'})});const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+      n.textContent='Open this on the other device within two days. It works once: '+d.link;
+      try{await navigator.clipboard.writeText(d.link);n.textContent+=' (copied)';}catch(e){}
+      if(navigator.share)navigator.share({title:'Link my One Button',text:d.link}).catch(()=>{});}
+    catch(e){n.textContent='Could not make the link: '+e.message;}b.disabled=false;};
   // A person's link carries their key once; it is kept on this phone and dropped from the address.
   {const k=new URLSearchParams(location.search).get('key');if(k&&/^[\w-]{16,80}$/.test(k)){LS.set('ob-key',k);history.replaceState(null,'',location.pathname);}}
+  // A single-use link from Jay's own app: this device gets a key of its own and the link is spent.
+  {const c=new URLSearchParams(location.search).get('claim');if(c&&/^[\w-]{24}$/.test(c)){history.replaceState(null,'',location.pathname);
+    fetch(API+'/api/person/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claim:c})}).then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))))
+      .then(d=>{LS.set('ob-key',d.key);showToast('This device is linked to your One Button');setTimeout(()=>location.reload(),900);})
+      .catch(e=>showToast('Could not link this device: '+e.message));}}
   renderNotes();
   statusEl.textContent='tap to speak';
   resetIdle();

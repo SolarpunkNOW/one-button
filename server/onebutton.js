@@ -40,7 +40,8 @@ async function whoIs(req) {
   if (hit && Date.now() - hit.at < 5 * 60e3) return hit.person;
   const q = await admin.firestore().collection("onebutton_people").where("hash", "==", h).limit(1).get();
   const p = q.empty ? null : q.docs[0].data();
-  const person = p && !p.revoked ? { name: p.name, list: p.list || p.name, trusted: !!p.trusted, site: p.site || "", admin: false } : null;
+  // A device key of Jay's own (list "jay", admin) acts as Jay; everyone else acts as themselves.
+  const person = p && !p.revoked ? { name: p.list === "jay" ? "jay" : p.name, device: p.name, list: p.list || p.name, trusted: !!p.trusted, site: p.site || "", admin: !!p.admin && p.list === "jay" } : null;
   PEOPLE_CACHE.set(h, { person, at: Date.now() });
   return person;
 }
@@ -58,6 +59,31 @@ async function personAdd(body) {
   PEOPLE_CACHE.clear();
   return [200, { name, key, site, trusted: !!body.trusted, link: `https://${site}.web.app/?key=${key}` }];
 }
+/* Linking another of Jay's own devices (the laptop browser, a second phone) without ever
+ * typing or pasting the master key: the app mints a device key of its own, tied to a single-use
+ * claim link. Opening the link on the new device stores the device key there and spends the
+ * link. The device shows in the people list as jay-<device> and can be revoked on its own. */
+async function personLink(body) {
+  const device = "jay-" + String(body.device || "device").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) + "-" + Date.now().toString(36).slice(-4);
+  const key = crypto.randomBytes(24).toString("base64url"), claim = crypto.randomBytes(18).toString("base64url");
+  await admin.firestore().collection("onebutton_people").doc(device).set({ name: device, list: "jay", admin: true, hash: hashKey(key), trusted: true, site: "one-button-jay", created: Date.now(), by: who().name, revoked: false });
+  await admin.firestore().collection("onebutton_claims").doc(claim).set({ key, device, created: Date.now(), used: false });
+  PEOPLE_CACHE.clear();
+  return [200, { device, link: OB_SITE + "/?claim=" + claim }];
+}
+async function personClaim(body) {
+  const id = String(body.claim || "");
+  if (!/^[A-Za-z0-9_-]{24}$/.test(id)) return [400, { error: "bad link" }];
+  const ref = admin.firestore().collection("onebutton_claims").doc(id);
+  const got = await admin.firestore().runTransaction(async (t) => {
+    const c = await t.get(ref);
+    if (!c.exists || c.data().used || c.data().created < Date.now() - 2 * 864e5) return null;
+    t.update(ref, { used: true, usedAt: Date.now(), key: admin.firestore.FieldValue.delete() });
+    return c.data();
+  });
+  if (!got) return [410, { error: "this link has been used or has run out" }];
+  return [200, { key: got.key, device: got.device }];
+}
 async function personList() {
   const docs = (await admin.firestore().collection("onebutton_people").get()).docs.map((d) => { const o = d.data(); delete o.hash; return o; });
   return [200, { people: docs }];
@@ -69,7 +95,7 @@ async function personRevoke(body) {
   PEOPLE_CACHE.clear();
   return [200, { name, revoked: true }];
 }
-const PERSON_ROUTES = { add: personAdd, list: personList, revoke: personRevoke };
+const PERSON_ROUTES = { add: personAdd, list: personList, revoke: personRevoke, link: personLink };
 
 async function transcribe(body) {
   return transcribeBuffer(Buffer.from(String(body.audio), "base64"), String(body.mimeType || "audio/webm"));
@@ -726,6 +752,26 @@ async function ivTranscript(body) {
 }
 
 // Laptop helper: puts back a transcript the server threw away before transcripts were kept.
+// A transcript from elsewhere (a vault note, a meeting tool) becomes a conversation here: the
+// same note step as a recording, no audio. The record says where it came from.
+async function ivImport(body) {
+  const transcript = String(body.transcript || "").trim().slice(0, 600000);
+  if (!transcript) return [400, { error: "no transcript" }];
+  const id = "import-" + (Number(body.created) || Date.now()).toString(36) + "-" + crypto.randomBytes(3).toString("hex");
+  const base = { id, name: String(body.title || id).slice(0, 120), created: Number(body.created) || Date.now(), collected: true, imported: true, source: String(body.source || "").slice(0, 200) };
+  const out = await chat({ messages: [{ role: "system", content: IV_SYS }, { role: "user", content: transcript }] }, 4000);
+  let note = null;
+  try { note = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  note = note || { summary: transcript.slice(0, 1200), title: base.name };
+  const arr = (v) => (Array.isArray(v) ? v.slice(0, 40) : []);
+  const people = Array.isArray(body.people) && body.people.length ? body.people.map((p) => String(p).slice(0, 60)).slice(0, 20) : arr(note.people).map(String);
+  const clean = { title: String(body.title || note.title || base.name).slice(0, 120), summary: String(note.summary || "").slice(0, 4000), people, peopleBy: Array.isArray(body.people) && body.people.length ? "jay" : "",
+    about: arr(note.mentioned).map(String).slice(0, 20), points: arr(note.points).map(String), quotes: arr(note.quotes).map(String),
+    actions: arr(note.actions).map((a) => ({ text: String((a && a.text) || a).slice(0, 300), due: String((a && a.due) || "") })),
+    projects: arr(note.projects).map((p) => ({ name: String((p && p.name) || "").slice(0, 120), idea: String((p && p.idea) || "").slice(0, 600) })) };
+  await listRef().collection("interviews").doc(id).set({ ...base, ...clean, transcript, segments: [], status: "done", processed: Date.now() });
+  return [200, { ...base, ...clean, status: "done" }];
+}
 async function ivRestore(body) {
   const id = String(body.id || "");
   if (!ID_RE.test(id)) return [400, { error: "bad id" }];
@@ -1123,7 +1169,22 @@ async function themeBuild(body) {
     }
     for (const p of d.projects || []) if (!p.held && hasWords(words, p.name, p.about, p.next)) projects.push({ space: sl, id: p.id, name: p.name, about: p.about, status: p.status, people: people.map((q) => q.name) });
   }
-  const theme = { slug, name, words, built: Date.now(), convs, projects };
+  // Jay's own recordings that sit in no space (voice notes to himself): his yes is the only one needed.
+  const inSpaces = new Set(convs.map((c) => c.iv).filter(Boolean));
+  const seeds = old.solo || [];
+  const soloHave = new Map(seeds.map((s) => [s.iv, s]));
+  const solo = [];
+  for (const d of (await listRef().collection("interviews").where("status", "==", "done").get()).docs) {
+    const iv = d.data();
+    if ((iv.people || []).length || inSpaces.has(iv.id) || !hasWords(words, iv.title, iv.summary, iv.points, iv.quotes, iv.transcript)) continue;
+    let seed = (soloHave.get(iv.id) || {}).seed;
+    if (!seed) {
+      const date = new Date(iv.created || Date.now()).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      seed = await writeHighlight([{ id: iv.id, title: iv.title || iv.name, date, summary: iv.summary, transcript: iv.transcript || "", segments: iv.segments || [] }], "Jay, alone", "jay", [{ id: "jay", name: "Jay" }], "solo", { theme: slug, visibility: "space" });
+    }
+    if (seed) solo.push({ iv: iv.id, title: iv.title || iv.name, created: iv.created, seed });
+  }
+  const theme = { slug, name, words, built: Date.now(), convs, projects, solo };
   await themeRef(slug).set(theme);
   return [200, { ok: true, convs: convs.length, projects: projects.length, seeds: convs.filter((c) => c.seed).length }];
 }
@@ -1143,12 +1204,33 @@ async function themeGet(body, host) {
     if (!host && !pub) continue;
     seeds.push({ space: c.space, conv: c.conv, title: doc.title, when: doc.when, points: doc.points, quotes: doc.quotes, people: c.people, date: c.date, convTitle: c.title, consent: host ? doc.consent : undefined, visibility: doc.visibility, link: doc.link || "", doc: doc.id });
   }
+  for (const s of t.solo || []) {
+    const doc = s.seed; if (!doc) continue;
+    const pub = doc.visibility === "public";
+    if (!host && !pub) continue;
+    seeds.push({ space: "solo", conv: s.iv, title: doc.title, when: doc.when, points: doc.points, quotes: doc.quotes, people: ["Jay"], date: new Date(s.created || 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }), convTitle: s.title, consent: host ? doc.consent : undefined, visibility: doc.visibility, link: doc.link || "", doc: doc.id });
+  }
   return [200, { slug: t.slug, name: t.name, words: host ? t.words : undefined, built: t.built, seeds, projects: host ? t.projects : (t.projects || []).map((p) => ({ name: p.name, about: p.about, status: p.status })),
     convs: host ? t.convs : undefined }];
 }
 async function themePublish(req, body) {
   const slug = String(body.slug || ""), space = String(body.space || ""), doc = String(body.doc || "");
-  if (!SLUG_RE.test(slug) || !SLUG_RE.test(space)) return [400, { error: "bad request" }];
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad request" }];
+  if (space === "solo") {
+    // A seed from Jay's own voice note: his yes is already there.
+    const ref = themeRef(slug), t = (await ref.get()).data() || {};
+    const i = (t.solo || []).findIndex((s) => s.seed && s.seed.id === doc);
+    if (i < 0) return [404, { error: "no such seed" }];
+    const d = t.solo[i].seed;
+    if (body.to === "private") { await hlRef().doc(doc).delete().catch(() => {}); d.visibility = "space"; delete d.link; }
+    else {
+      await hlRef().doc(doc).set({ id: doc, title: d.title, when: d.when, points: d.points, quotes: d.quotes, people: ["Jay"], space: "solo", theme: slug, publishedBy: "jay", publishedAt: Date.now(), convTitles: [{ title: t.solo[i].title, date: "" }] });
+      d.visibility = "public"; d.link = OB_SITE + "/h/?id=" + doc;
+    }
+    await ref.set({ solo: t.solo }, { merge: true });
+    return [200, { ok: true, link: d.link || "" }];
+  }
+  if (!SLUG_RE.test(space)) return [400, { error: "bad request" }];
   return spPublish(req, { slug: space, doc, to: body.to === "private" ? "private" : "public" }, "");
 }
 async function hlFind(slug, id) {
@@ -1356,7 +1438,7 @@ async function ivDrop(body) {
   await listRef().collection("asks").doc(askId).update({ ship: "declined", stage: "declined", status: "done", dropped: Date.now(), planOk: false });
   return [200, { ok: true }];
 }
-const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
+const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending: ivPending, collected: ivCollected, answer: ivAnswer, restore: ivRestore, import: ivImport, with: ivWith, voices: ivVoices, approve: ivApprove, shipped: ivShipped, progress: ivProgress, plan: ivPlanOk, drop: ivDrop };
 const SP_ROUTES = { save: spSave, list: spList, get: spGet, invite: spInvite, code: spCode, person: spForPerson };
 
 exports.oneButton = onRequest(
@@ -1398,6 +1480,13 @@ exports.oneButton = onRequest(
       catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
+    if (req.path.endsWith("/person/claim")) {
+      // A new device of Jay's spends its single-use link for a key of its own.
+      const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
+      if (!(await checkRateLimit(30, "obclaim_" + ip))) { res.status(429).json({ error: "too many tries today" }); return; }
+      try { send(await personClaim(body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+      return;
+    }
     if (req.path.endsWith("/hl/get")) {
       // A published highlight: open to anyone with the link.
       try { send(await hlGet(body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
@@ -1420,7 +1509,7 @@ exports.oneButton = onRequest(
 
 // Everything a key holder can do, run as that person so listRef() points at their list.
 async function routed(req, res, body, sp, send, me) {
-    const pe = req.path.match(/\/person\/(add|list|revoke)$/);
+    const pe = req.path.match(/\/person\/(add|list|revoke|link)$/);
     if (pe) {
       if (!me.admin) { res.status(403).json({ error: "only Jay adds people" }); return; }
       try { send(await PERSON_ROUTES[pe[1]](body)); } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
