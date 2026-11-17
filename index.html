@@ -103,6 +103,7 @@
   .al-row .tbtn{min-height:44px}
   .sheet{position:fixed;inset:0;z-index:5;background:var(--cream);color:var(--ink);transform:translateY(100%);transition:transform .32s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   .sheet.open{transform:translateY(0)}
+  .lk-cam{width:52px;height:52px;border-radius:50%;border:1px solid currentColor;background:transparent;color:inherit;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-right:14px;align-self:center}
   .an-card{border-bottom:1px solid var(--line);padding:14px 0}
   .an-card.new{border-left:3px solid var(--spark);padding-left:12px}
   .an-q{font-weight:700;margin:4px 0 6px;overflow-wrap:anywhere}
@@ -323,6 +324,7 @@
   <div class="bar">
     <div class="mark">One <b>Button</b></div>
     <div class="ico-row">
+      <button class="ico-btn" data-camera title="Camera" aria-label="Take a photo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
       <button class="ico-btn" id="open-today" title="Today" aria-label="Today"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></button>
       <button class="ico-btn" id="open-proj" title="Projects" aria-label="Projects"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
       <button class="ico-btn" id="open-lock" title="Lock screen view" aria-label="Lock screen view">&#9638;</button>
@@ -539,8 +541,9 @@
   <div class="lk-head"><span>To do</span><span id="lk-count"></span></div>
   <div class="lk-list" id="lk-list"></div>
   <div class="lk-foot">
-    <div class="lk-status" id="lk-status" aria-live="polite">tap to speak, tap again to stop</div>
+    <div class="lk-status" id="lk-status" aria-live="polite">hold to speak and let go, or tap to start and tap to stop</div>
     <div class="lk-row">
+      <button class="lk-cam" data-camera aria-label="Take a photo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
       <button class="lk-orb" id="lk-orb" aria-label="Record a task"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
     </div>
   </div>
@@ -986,38 +989,14 @@ function handle(out,original){
   const c=findContact(out.contact);
   // A call to someone not saved yet: the recorder starts now, and the person is learned from this
   // call (their number, typed or picked once) instead of importing a whole address book.
-  if(!c&&out.action==='call'&&out.contact){
-    rLabel.textContent='call';startCallRec();
-    const name=String(out.contact).trim().replace(/^./,x=>x.toUpperCase());
-    rBody.innerHTML=`Calling ${escapeHtml(name)}${NATIVE&&NATIVE.startInterview?', recording':''}. First time: what is their number?
-      <input id="cl-num" inputmode="tel" placeholder="+20 100 123 4567" style="display:block;width:100%;margin-top:8px;font-size:16px;padding:10px" aria-label="Their number">`;
-    const go=svc=>{const num=cleanNum(($('#cl-num')||{}).value);if(!num){showToast('Type or pick their number first');return;}
-      const nc={name,phone:num,tg:'',email:'',learned:Date.now()};contacts.push(nc);LS.set('ob-contacts',contacts);try{renderContacts();}catch{}
-      showToast(name+' saved, with this number');callPerson(nc,svc,true);};
-    for(const s of ['phone','whatsapp','signal'])addAct(s==='phone'?'Phone':s[0].toUpperCase()+s.slice(1),s==='phone'?'go':'alt',()=>go(s));
-    if(NATIVE&&NATIVE.pickContact)addAct('Pick from my phone','alt',()=>{const was=window.obContactPicked;window.obContactPicked=(n,p)=>{window.obContactPicked=was;const i=$('#cl-num');if(i&&p)i.value=p;};try{NATIVE.pickContact();}catch{}});
-    addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});
-    return;
+  if(out.action==='call'&&out.contact){
+    const said=/whatsapp/i.test(out.channel||'')?'whatsapp':/signal/i.test(out.channel||'')?'signal':/telegram/i.test(out.channel||'')?'telegram':/phone|ring|dial/i.test(out.channel||'')?'phone':'';
+    startCall(out.contact,said);return;
   }
   if(!c){
     rLabel.textContent=out.action||'reach';
     rBody.textContent=`I don't have "${out.contact||'that person'}" yet. Add them in settings with their channels, then try again.`;
     addAct('Add contact','go',()=>openSheet('#sheet-settings')); return;
-  }
-  if(out.action==='call'){
-    rLabel.textContent='call';
-    // "Call Simon on Signal": it goes straight out. "Call Simon": the recorder starts at once and
-    // the ways to reach Simon come up, the one he is usually called on first. Each call teaches it.
-    const said=/whatsapp/i.test(out.channel||'')?'whatsapp':/signal/i.test(out.channel||'')?'signal':/telegram/i.test(out.channel||'')?'telegram':/phone|ring|dial/i.test(out.channel||'')?'phone':'';
-    if(!c.phone&&!c.tg){rBody.textContent=`No number saved for ${c.name}.`;addAct('Edit contacts','go',()=>openSheet('#sheet-settings'));return;}
-    startCallRec();
-    if(said&&(said==='telegram'?c.tg:c.phone)){rBody.textContent=`Calling ${c.name}${said!=='phone'?' on '+said:''}${NATIVE&&NATIVE.startInterview?', recording':''}`;callPerson(c,said,true);return;}
-    const ways=['phone','whatsapp','signal','telegram'].filter(s=>s==='telegram'?c.tg:c.phone);
-    const used=c.calls||{};ways.sort((a,b)=>(used[b]||0)-(used[a]||0));
-    rBody.textContent=`Calling ${c.name}${NATIVE&&NATIVE.startInterview?', recording':''}. How?`;
-    ways.forEach((s,i)=>addAct((s==='phone'?'Phone':s[0].toUpperCase()+s.slice(1))+(i===0&&used[s]?' (usual)':''),i===0?'go':'alt',()=>callPerson(c,s,true)));
-    addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});
-    return;
   }
   rLabel.textContent='message';
   const ch=bestChannel(c,out.channel);
@@ -1046,6 +1025,32 @@ function callPerson(c,svc,recording){const num=cleanNum(c.phone),tg=(c.tg||'').r
   if(NATIVE&&NATIVE.placeCall){if(!recording)startCallRec();CALL_REC=false;
     const target=svc==='telegram'?tg:num;setTimeout(()=>{try{NATIVE.placeCall(target,svc,c.name);}catch{showToast('Could not place the call');}},recording?200:900);return;}
   location.href=svc==='whatsapp'?`https://wa.me/${num.replace('+','')}`:svc==='signal'?`https://signal.me/#p/${num}`:svc==='telegram'?`https://t.me/${tg}`:'tel:'+num;}
+// Calling someone: the recorder starts first, then the app to call them on (Phone, WhatsApp, Signal
+// or Telegram). The app chosen is remembered for that person and used straight away next time. A
+// saved number (or Telegram name) opens their chat or dials them; without one the app simply opens
+// and you pick them there. New names become contacts on the spot.
+const CALL_APPS=[['phone','Phone'],['whatsapp','WhatsApp'],['signal','Signal'],['telegram','Telegram']];
+const callName=s=>(CALL_APPS.find(x=>x[0]===s)||[s,s])[1];
+function callOpen(c,svc){
+  c.callApp=svc;c.calls=c.calls||{};c.calls[svc]=(c.calls[svc]||0)+1;LS.set('ob-contacts',contacts);
+  if(svc==='telegram'?c.tg:c.phone){callPerson(c,svc,true);return;}
+  if(NATIVE&&NATIVE.openApp){try{NATIVE.openApp(svc);return;}catch(e){}}
+  location.href={phone:'tel:',whatsapp:'whatsapp://send',signal:'sgnl://',telegram:'tg://'}[svc];}
+function startCall(name,said){
+  const nm=String(name||'').trim();let c=findContact(nm);
+  if(!c){c={name:nm.replace(/^./,x=>x.toUpperCase()),phone:'',tg:'',email:'',learned:Date.now()};contacts.push(c);LS.set('ob-contacts',contacts);try{renderContacts();}catch{}}
+  if(lock.classList.contains('on'))hideLock();
+  startCallRec();
+  result.classList.add('show');rActs.innerHTML='';rLabel.textContent='call';
+  const rec=NATIVE&&NATIVE.startInterview?'Recording. ':'';
+  const pick=said||c.callApp;
+  if(pick){rBody.textContent=`${rec}Opening ${callName(pick)} for ${c.name}.`;
+    CALL_APPS.filter(x=>x[0]!==pick).forEach(([s,l])=>addAct(l,'alt',()=>callOpen(c,s)));
+    addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});
+    setTimeout(()=>callOpen(c,pick),700);return;}
+  rBody.textContent=`${rec}Call ${c.name} on:`;
+  CALL_APPS.forEach(([s,l],i)=>addAct(l,i===0?'go':'alt',()=>callOpen(c,s)));
+  addAct('Not a call','alt',()=>{stopCallRec();result.classList.remove('show');});}
 function gcal(o){
   const s=o.start?new Date(o.start):new Date(Date.now()+3600000);
   const e=new Date(s.getTime()+(o.minutes||60)*60000);
@@ -1974,7 +1979,7 @@ $('#set-save').onclick=()=>{let k=$('#set-key').value.trim();const m=k.match(/[?
 // The phone's back gesture closes whatever sheet is open. Each open sheet holds one history
 // step; closing a sheet any other way gives that step back. A space page in the frame is loaded
 // with replace, so it never adds steps of its own that back would have to walk through first.
-window.obNativeEvent=(k,id,txt)=>{const send=w=>{for(let n=0;n<w.frames.length;n++){try{w.frames[n].postMessage({obNative:[k,id,txt]},'*');send(w.frames[n]);}catch(e){}}};send(window);};
+window.obNativeEvent=(k,id,txt)=>{if(k==='toast'){showToast(txt);return;}const send=w=>{for(let n=0;n<w.frames.length;n++){try{w.frames[n].postMessage({obNative:[k,id,txt]},'*');send(w.frames[n]);}catch(e){}}};send(window);};
 function spFrame(url){const f=$('#sp-frame');try{f.contentWindow.location.replace(new URL(url,location.href).href);}catch(e){f.src=url;}}
 const sheetOpen=()=>!!document.querySelector('.sheet.open');
 window.addEventListener('popstate',()=>{if(sheetOpen()){SP_FROM='';spFrame('about:blank');closeSheets(true);}});
@@ -2158,11 +2163,9 @@ async function lockText(t){
       if(viewSaid(t)){lock.classList.remove('busy');return;}
       {const l=listenTake(t);if(l){lock.classList.remove('busy');lkSay(l==='listening'?'gathering the key ideas':'done');return;}}
       {const m=t.match(new RegExp('^'+FILLER+/(?:call|ring|phone)\s+(.+?)(?:\s+on\s+(whatsapp|signal|telegram|the phone|phone))?[.!]?$/.source,'i'));
-        if(m){const c=findContact(m[1]);lock.classList.remove('busy');
-          if(!c){lkSay(`I don't have "${m[1]}" yet; add them in Settings`);return;}
-          const svc=/whatsapp/i.test(m[2]||'')?'whatsapp':/signal/i.test(m[2]||'')?'signal':/telegram/i.test(m[2]||'')?'telegram':'phone';
-          if(!c.phone&&!(svc==='telegram'&&c.tg)){lkSay(`No number saved for ${c.name}`);return;}
-          lkSay(`Calling ${c.name}${svc!=='phone'?' on '+svc:''}${NATIVE&&NATIVE.placeCall?', recording':''}`);callPerson(c,svc);return;}}
+        if(m){lock.classList.remove('busy');
+          const svc=/whatsapp/i.test(m[2]||'')?'whatsapp':/signal/i.test(m[2]||'')?'signal':/telegram/i.test(m[2]||'')?'telegram':/phone/i.test(m[2]||'')?'phone':'';
+          startCall(m[1],svc);return;}}
       {const said=await toClaude(t);if(said){lock.classList.remove('busy');lkSay(said);return;}}
       // Recipes need room to read: they open in the app.
       if(RECIPE_RE.test(t)||ACT_RE.test(t)){lock.classList.remove('busy');hideLock();route(t);return;}
@@ -2662,7 +2665,18 @@ function holdFor(el,fn){let tm=0;
   el.addEventListener('pointerdown',()=>{el.held=false;tm=setTimeout(()=>{el.held=true;try{navigator.vibrate&&navigator.vibrate(15);}catch{}fn();},600);});
   ['pointerup','pointerleave','pointercancel'].forEach(e=>el.addEventListener(e,()=>clearTimeout(tm)));
   el.oncontextmenu=e=>e.preventDefault();}
-holdFor(orb,()=>{if(!mainLive)takePhoto();});holdFor($('#lk-orb'),()=>{if(!lkLive)takePhoto();});
+// Hold the button, speak, let go: it goes. A quick tap still starts a recording that the next tap
+// stops (and on the lock screen in the phone app, a tap starts a long recording). The camera has
+// its own icon now, next to the button.
+function holdToTalk(el,start,stop,live){let tm=0,talking=false;
+  el.addEventListener('pointerdown',()=>{el.held=false;talking=false;clearTimeout(tm);
+    tm=setTimeout(()=>{if(live())return;el.held=true;talking=true;try{navigator.vibrate&&navigator.vibrate(20);}catch{}start();},260);});
+  const up=()=>{clearTimeout(tm);if(talking){talking=false;setTimeout(()=>{try{stop();}catch{}},250);}};
+  ['pointerup','pointercancel'].forEach(e=>el.addEventListener(e,up));
+  el.oncontextmenu=e=>e.preventDefault();}
+holdToTalk(orb,()=>listen(),()=>{if(mainLive&&mainRec)mainRec.stop();},()=>mainLive);
+holdToTalk($('#lk-orb'),()=>lockRecord(),()=>{if(lkLive&&lkRec)lkRec.stop();},()=>lkLive);
+document.querySelectorAll('[data-camera]').forEach(b=>b.onclick=()=>takePhoto());
 // The choice, over everything (the lock screen too): one tap, then the camera.
 function pickPhotoKind(){let box=$('#pk');
   if(!box){box=document.createElement('div');box.id='pk';box.className='vf pick';
