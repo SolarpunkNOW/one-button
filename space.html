@@ -906,8 +906,17 @@ function gatherOpen(topic,FULL){
   const NAT=window.OBNative&&OBNative.speak?OBNative:null;
   const canHear=!!(NAT&&OBNative.hearOnce)||!!(window.SpeechRecognition||window.webkitSpeechRecognition);
   const waiters={};
-  window.obNativeEvent=window.obNativeEvent||((k,id,txt)=>{const f=waiters[id];if(f){delete waiters[id];f(txt||'');}});
-  window.addEventListener('message',e=>{const m=e.data&&e.data.obNative;if(m&&waiters[m[1]]){const f=waiters[m[1]];delete waiters[m[1]];f(m[2]||'');}});
+  // In the phone app the episode is handed to Android, which plays on with the screen off; this
+  // page then only sends commands and shows what the phone reports.
+  const NP=window.OBNative&&OBNative.podLoad?OBNative:null;let NS=null;
+  function nativeState(js){try{NS=JSON.parse(js||'{}');}catch(e){return;}if(!EP||NS.title!==EP.title)return;
+    playing=!!NS.playing;i=NS.i;setGo();if(NS.i>=0)now(NS.now,NS.sub);else if(NS.i===-1&&NS.lastClip>=0)now('That is the episode','Play it again, or tap a part below.');
+    $('#pod-more').disabled=NS.lastClip<0;
+    document.querySelectorAll('#pod-list li').forEach((b,k)=>{b.classList.toggle('on',k===NS.i);b.classList.toggle('done',k<NS.i);});}
+  const onEvent=(k,id,txt)=>{if(k==='pod'){nativeState(txt);return;}const f=waiters[id];if(f){delete waiters[id];f(txt||'');}};
+  window.obNativeEvent=window.obNativeEvent||onEvent;
+  window.addEventListener('message',e=>{const m=e.data&&e.data.obNative;if(m)onEvent(m[0],m[1],m[2]);});
+  const nativeParts=()=>EP.parts.map(x=>x.kind==='clip'?{...x,src:EP.audio[x.conv]||''}:x);
   function auth(){const h={'Content-Type':'application/json'},b={slug:SL,topic:TP};
     try{const act=typeof ACT!=='undefined'?ACT:null;if(act&&act.key)h['x-ob-key']=act.key;else if(act&&act.token)b.token=act.token();}catch(e){}
     if(!h['x-ob-key']&&!b.token){try{const k=(window.OBNative&&OBNative.apiKey&&OBNative.apiKey())||JSON.parse(localStorage.getItem('ob-key')||'""');if(k)h['x-ob-key']=k;}catch(e){}}
@@ -943,22 +952,25 @@ function gatherOpen(topic,FULL){
     if(SR){try{const r=new SR();r.lang='en-GB';r.interimResults=true;let got='';r.onresult=e=>{got=[...e.results].map(x=>x[0].transcript).join(' ');if(/\bmore\b/i.test(got)){r.abort();heard(got);}};
       r.onend=()=>heard(got);r.onerror=()=>{};r.start();waitT=setTimeout(()=>{try{r.stop();}catch(e){}},3000);return;}catch(e){}}
     done();}
-  function go(n){i=n;const x=EP.parts[n];if(!x){playing=false;i=-1;setGo();now('That is the episode','Play it again, or tap a part below.');return;}
+  function go(n){if(NP){OBNative.podLoad(JSON.stringify({title:EP.title,parts:nativeParts()}),n);return;}
+    i=n;const x=EP.parts[n];if(!x){playing=false;i=-1;setGo();now('That is the episode','Play it again, or tap a part below.');return;}
     partStart=Date.now();document.querySelectorAll('#pod-list li').forEach((b,k)=>{b.classList.toggle('on',k===n);b.classList.toggle('done',k<n);});
     const next=()=>{if(playing)go(n+1);};
     if(x.kind==='say'){now(x.label,x.text);say(x,next);return;}
     lastClip=x;$('#pod-more').disabled=false;now(x.label,'From "'+x.title+'" at '+mmss(x.at));
     clip(x,x.at,x.until,()=>{if(!playing)return;if(canHear)listenForMore(next);else next();});}
   // More: a wider stretch around the last moment (45 seconds before it, two minutes after), then on.
-  function doMore(){const x=lastClip;if(!x)return;const back=i;
+  function doMore(){if(NP){OBNative.podCmd('more',0);return;}const x=lastClip;if(!x)return;const back=i;
     if(more&&more.clip===x){stopAt+=120;more.to+=120;now('More of "'+x.title+'"','Playing on to '+mmss(more.to)+'.');return;}
     stopAll();playing=true;setGo();more={clip:x,to:x.until+120};
     now('More of "'+x.title+'"','From '+mmss(Math.max(0,x.at-45))+' to '+mmss(more.to)+'. Press again for even more.');
     clip(x,Math.max(0,x.at-45),more.to,()=>{more=null;if(playing)go(EP.parts[back]&&EP.parts[back].kind==='clip'&&EP.parts[back]===x?back+1:back+1);});}
   $('#pod-more').onclick=doMore;
-  $('#pod-go').onclick=()=>{if(playing){playing=false;stopAll();setGo();now('Paused','Carry on when you are ready.');return;}
+  $('#pod-go').onclick=()=>{
+    if(NP&&EP&&NS&&NS.title===EP.title&&NS.i>=0){OBNative.podCmd(playing?'pause':'play',0);return;}
+    if(playing){playing=false;stopAll();setGo();now('Paused','Carry on when you are ready.');return;}
     playing=true;setGo();(EP?Promise.resolve(EP):load(false)).then(e=>{if(!e){playing=false;setGo();return;}go(i>=0?i:0);}).catch(err=>{playing=false;setGo();now('Could not get the episode',err.message);});};
-  const step=d=>{if(!EP){$('#pod-go').click();return;}const back=d<0&&Date.now()-partStart>4000?0:d;stopAll();more=null;playing=true;setGo();go(Math.max(0,Math.min(EP.parts.length,(i<0?0:i)+back)));};
+  const step=d=>{if(!EP){$('#pod-go').click();return;}if(NP&&NS&&NS.title===EP.title&&NS.i>=0){OBNative.podCmd(d<0?'prev':'next',0);return;}const back=d<0&&Date.now()-partStart>4000?0:d;stopAll();more=null;playing=true;setGo();go(Math.max(0,Math.min(EP.parts.length,(i<0?0:i)+back)));};
   $('#pod-next').onclick=()=>step(1);$('#pod-prev').onclick=()=>step(-1);
   $('#pod-fresh').onclick=()=>{stopAll();playing=false;i=-1;setGo();load(true).catch(err=>now('Could not make it',err.message));};
   if('mediaSession' in navigator){try{navigator.mediaSession.setActionHandler('pause',()=>{if(playing)$('#pod-go').click();});navigator.mediaSession.setActionHandler('play',()=>{if(!playing)$('#pod-go').click();});
@@ -966,6 +978,9 @@ function gatherOpen(topic,FULL){
   // Shown once someone is let in (the host's key or a member's sign-in); not in the preview.
   const show=()=>{try{if((typeof ACT!=='undefined'&&ACT)||(window.OBNative&&OBNative.apiKey)||localStorage.getItem('ob-key'))$('#pod').classList.remove('hidden');}catch(e){}};
   show();setTimeout(show,1500);setTimeout(show,5000);
+  if(NP){try{OBNative.podCmd('state',0);}catch(e){}
+    // Already playing on the phone: load this episode's parts quietly so the controls follow it.
+    setTimeout(()=>{if(NS&&NS.i>=0&&!EP)load(false).then(()=>nativeState(JSON.stringify(NS))).catch(()=>{});},800);}
 })();
 </script>
 <script>
