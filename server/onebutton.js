@@ -1664,6 +1664,106 @@ async function spPodcast(req, body, visitor) {
   return [200, withLinks(episode)];
 }
 
+/* ---------- Listening to key ideas, summoned by voice ----------
+ * "Play me key ideas around flow funding": the matching moments are gathered from every
+ * conversation space, a few key ideas are named, and each idea gets the clips that carry it. The
+ * episode opens with a short spoken menu of the ideas, then plays idea by idea, so the listener
+ * can jump between ideas. Kept, so the last ones can be played again. */
+const LISTEN_SYS = `You make a short listening session from excerpts of recorded conversations held in different shared spaces. Lines start with a marker like [k3@431] (conversation k3, second 431). Only conversations marked "has recording" can be played. Reply with JSON only:
+{"title": "at most 8 words",
+ "intro": "spoken, 40 to 80 words: what this session is about, then the key ideas by name in order, so the listener knows they can jump between them",
+ "ideas": [{"name": "2 to 5 words", "line": "one spoken sentence that says the idea plainly", "clips": [{"ref": "k3@431", "until": 520}]}]}
+3 to 6 ideas, strongest first, each a distinct idea. Each idea has 1 to 3 clips of 40 to 90 seconds from conversations that have a recording, starting where a speaker begins the thought and ending after they finish it. Never anything negative or reflective about any person's personality, character or state of mind. Written to be heard: short sentences, no markers in the spoken text, no em dashes.`;
+const listenCol = () => listRef().collection("listens");
+const sentenceEnd = (x) => /[.!?]["')\]]?\s*$/.test(String(x || ""));
+// Clip edges on whole sentences: back to the last full stop within 40 seconds, on to the next
+// within 45 seconds past what was asked, pauses as a fallback, a breath either side.
+function clipEdges(segs, at, want) {
+  if (!segs.length) return { at: Math.max(0, at - 0.6), until: want + 0.4 };
+  const pause = (k) => k <= 0 || k >= segs.length || sentenceEnd(segs[k - 1][1]) || segs[k][0] - segs[k - 1][0] - String(segs[k - 1][1]).split(/\s+/).length / 2.8 > 0.7;
+  let i = Math.max(0, segs.findIndex(([a]) => a > at + 0.5) - 1); if (segs.findIndex(([a]) => a > at + 0.5) < 0) i = segs.length - 1;
+  { const first = i; let k = i, hit = -1, pz = -1;
+    while (k >= 0 && segs[first][0] - segs[k][0] <= 40) { if (k === 0 || sentenceEnd(segs[k - 1][1])) { hit = k; break; } if (pz < 0 && pause(k)) pz = k; k--; }
+    i = hit >= 0 ? hit : pz >= 0 ? pz : first; }
+  const start = segs[i][0];
+  if (want < start + 30) want = start + 30; if (want > start + 100) want = start + 100;
+  let j = segs.findIndex(([a]) => a >= want), until;
+  if (j < 0) until = 1e7;
+  else { let k = j, hit = -1, pz = -1;
+    while (k <= segs.length && (k === segs.length || segs[k][0] - want <= 45)) { if (k === segs.length || sentenceEnd(segs[k - 1][1])) { hit = k; break; } if (pz < 0 && pause(k)) pz = k; k++; }
+    j = hit >= 0 ? hit : pz >= 0 ? pz : j; until = j < segs.length ? segs[j][0] + 0.4 : 1e7; }
+  return { at: Math.max(0, start - 0.6), until };
+}
+const withSrc = (ep) => ({ ...ep, parts: (ep.parts || []).map((x) => ({ ...x, src: x.file ? STREAM_BASE + seal(x.file) : "" })) });
+async function spListen(req, body) {
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const q = String(body.q || "").trim().slice(0, 300);
+  if (!q) return [400, { error: "say what to listen to" }];
+  const docs = (await listRef().collection("spaces").get()).docs;
+  const hint = [...new Set(docs.flatMap((s) => [...((((s.data().added || {}).synth || {}).topics) || []), ...(((s.data().added || {}).topics) || [])].map((x) => x.name)))].slice(0, 30).join(", ");
+  const terms = await widen(q, hint);
+  const hits = (text) => { const s = String(text || "").toLowerCase(), ws = new Set(WORDS(s)); let n = 0; for (const x of terms) if (x.includes(" ") || x.length > 5 ? s.includes(x) : ws.has(x)) n++; return n; };
+  const blocks = [], refs = {}, segsOf = {};
+  let k = 0;
+  for (const snap of docs) {
+    const slug = snap.id, s = await migrateSpace(slug, snap), d = withAdded(s), marks = (d.marks || []).filter((m) => m.kind === "private");
+    for (const c of d.convs || []) {
+      if (c.held) continue;
+      const w = await wordsFor(slug, c), segs = (w.segments || []).filter((x) => x && x[1]);
+      let score = hits(c.title) * 3 + hits(c.summary) * 2; const keep = new Set();
+      segs.forEach(([, x], i) => { const h = hits(x); if (h) { score += h; for (let j = i - 2; j <= i + 4; j++) keep.add(j); } });
+      if (!score) continue;
+      let file = "";
+      if (c.audio) { const f = recOf(slug, c); const [ok] = await f.exists().catch(() => [false]); if (ok) file = f.name; }
+      const key = "k" + (++k);
+      refs[key] = { slug, space: s.data().name || slug, conv: c.id, title: c.title || "Conversation", date: c.date || "", file, private: marks.filter((m) => m.conv === c.id).map((m) => [m.from, m.to]) };
+      segsOf[key] = segs;
+      const idx = [...keep].filter((i) => i >= 0 && i < segs.length).sort((a, b) => a - b).slice(0, 140);
+      blocks.push({ score, text: `## ${key}: ${refs[key].title} (${refs[key].space}, ${refs[key].date})${file ? " has recording" : " no recording"}\nSummary: ${String(c.summary || "").slice(0, 500)}\n${idx.map((i) => `[${key}@${Math.round(segs[i][0])}] ${String(segs[i][1]).slice(0, 400)}`).join("\n")}` });
+    }
+  }
+  if (!blocks.some((b) => /has recording/.test(b.text))) return [200, { none: true, q, title: q, parts: [] }];
+  blocks.sort((a, b) => b.score - a.score);
+  let ctx = ""; for (const b of blocks) { if (ctx.length + b.text.length > 90000) continue; ctx += b.text + "\n\n"; }
+  const out = await chat({ messages: [{ role: "system", content: LISTEN_SYS }, { role: "user", content: `Listen for: ${q}\n\n${ctx}` }] }, 3500);
+  let ep = null;
+  try { ep = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!ep || !Array.isArray(ep.ideas)) return [502, { error: "the session did not come together this time; try again" }];
+  const parts = [{ kind: "say", text: String(ep.intro || "").slice(0, 900), label: "The key ideas", idea: -1 }], ideas = [];
+  // A stretch already played under an earlier idea is not played again.
+  const used = []; const fresh = (c) => !used.some((u) => u.conv === c.conv && u.key === c.key && Math.min(u.until, c.until) - Math.max(u.at, c.at) > 0.3 * (c.until - c.at));
+  ep.ideas.slice(0, 6).forEach((idea) => {
+    const clips = (Array.isArray(idea.clips) ? idea.clips : []).map((x) => {
+      const m = String((x && x.ref) || "").replace(/[\[\]]/g, "").match(/^(k\d+)@(\d+(?:\.\d+)?)$/);
+      if (!m || !refs[m[1]] || !refs[m[1]].file) return null;
+      const r = refs[m[1]], e = clipEdges(segsOf[m[1]], +m[2], Number(x.until) || +m[2] + 60);
+      if (r.private.some(([a, b]) => e.at < b && e.until > a)) return null;
+      return { kind: "clip", key: m[1], conv: r.conv, space: r.space, title: r.title, at: Math.round(e.at * 10) / 10, until: Math.round(e.until * 10) / 10, private: r.private, file: r.file };
+    }).filter(Boolean).filter((c) => { if (!fresh(c)) return false; used.push(c); return true; }).slice(0, 3);
+    if (!clips.length) return;
+    const n = ideas.length, name = String(idea.name || "An idea").slice(0, 60);
+    ideas.push({ name, line: String(idea.line || "").slice(0, 300) });
+    parts.push({ kind: "say", text: `${name}. ${String(idea.line || "")}`.slice(0, 400), label: name, idea: n });
+    clips.forEach((c) => parts.push({ ...c, label: name, idea: n }));
+  });
+  if (!ideas.length) return [200, { none: true, q, title: q, parts: [] }];
+  const id = "l" + Date.now().toString(36);
+  await Promise.all(parts.map(async (x, n) => {
+    if (x.kind !== "say") return;
+    try { const f = admin.storage().bucket().file(`onebutton/podcasts/listen/${id}/${n}.wav`); await f.save(await voice(x.text), { contentType: "audio/wav", resumable: false }); x.file = f.name; } catch {}
+  }));
+  const episode = { id, q, title: String(ep.title || q).slice(0, 120), ideas, parts, at: Date.now() };
+  await listenCol().doc(id).set(episode);
+  return [200, withSrc(episode)];
+}
+async function spListened(req, body) {
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const id = String(body.id || "");
+  if (id) { const d = (await listenCol().doc(id).get()).data(); return d ? [200, withSrc(d)] : [404, { error: "that session is gone" }]; }
+  const got = (await listenCol().orderBy("at", "desc").limit(10).get()).docs.map((x) => ({ id: x.id, q: x.data().q, title: x.data().title, at: x.data().at }));
+  return [200, { recent: got }];
+}
+
 async function spAskAll(req, body, visitor) {
   const q = String(body.q || "").trim().slice(0, 500);
   if (!q) return [400, { error: "ask a question" }];
@@ -2690,7 +2790,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "podcast", "allconvs", "gather", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "podcast", "allconvs", "gather", "listen", "listened", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2702,7 +2802,7 @@ exports.oneButton = onRequest(
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
         present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
-        askall: () => spAskAll(req, body, visitor), podcast: () => spPodcast(req, body, visitor), allconvs: () => spAllConvs(req), gather: () => spGather(req, body), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
+        askall: () => spAskAll(req, body, visitor), podcast: () => spPodcast(req, body, visitor), allconvs: () => spAllConvs(req), gather: () => spGather(req, body), listen: () => spListen(req, body), listened: () => spListened(req, body), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
         synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor),
         mentions: () => spMentions(req, body, visitor), mentionset: () => spMentionSet(req, body, visitor) }[sp[1]];
       try { send(await fn()); }

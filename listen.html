@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Listen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{--paper:#FFFFFF;--surface:#F5F5F5;--ink:#1A1A1A;--muted:#555555;--line:rgba(26,26,26,.15);--spark:#E6FF00}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 "Inter",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .wrap{max-width:640px;margin:0 auto;padding:16px 16px 48px}
+  .tag{font:500 11px "IBM Plex Mono",monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  h1{font:800 26px/1.15 "Inter Tight",sans-serif;letter-spacing:-.02em;margin:6px 0 14px}
+  button{font:600 15px "Inter",sans-serif;background:var(--paper);color:var(--ink);border:1px solid var(--ink);padding:10px 14px;min-height:44px;cursor:pointer;border-radius:0}
+  button:disabled{opacity:.4;cursor:default}
+  button.link,button.link::before{border:0!important;background:none!important;padding:6px 0;min-height:36px;text-decoration:underline;content:none!important}
+  .ctl{display:flex;align-items:center;justify-content:center;gap:14px;margin:6px 0 4px}
+  .big{font:700 18px "Inter",sans-serif;flex:1;max-width:220px;min-height:56px}
+  .sk{width:56px;height:56px;padding:0;display:flex;align-items:center;justify-content:center}
+  .now{text-align:center;min-height:52px;margin:10px 0}
+  .now .sub{color:var(--muted);font-size:15px;margin-top:4px}
+  .row2{display:flex;gap:10px;margin:6px 0 16px}
+  .row2 button{flex:1;min-height:52px}
+  #say{background:var(--spark);border-color:var(--ink)}
+  #say.on{background:var(--ink);color:var(--paper)}
+  .ideas{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+  .ideas li{border-bottom:1px solid var(--line)}
+  .ideas button{display:block;width:100%;text-align:left;border:0!important;background:none!important;padding:12px 0;min-height:52px}
+  .ideas button::before{content:none!important}
+  .ideas li.on button{font-weight:700}
+  .ideas .n{font:500 12px "IBM Plex Mono",monospace;color:var(--muted);margin-right:8px}
+  .ideas .ln{display:block;font-weight:400;color:var(--muted);font-size:14px;margin-top:2px}
+  .note{color:var(--muted);font-size:14px}
+  .ask{display:flex;gap:8px;margin:10px 0}
+  .ask input{flex:1;font:16px "Inter",sans-serif;padding:10px;border:1px solid var(--ink);min-width:0}
+</style>
+<script src="/skins/skin.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <span class="tag" id="top">Listen</span>
+  <h1 id="title">Key ideas</h1>
+  <div id="start" hidden>
+    <p class="note">Say it into One Button, like "play me key ideas around flow funding", or type it here.</p>
+    <div class="ask"><input id="q" placeholder="Key ideas around…" aria-label="What to listen to"><button id="q-go">Listen</button></div>
+    <div id="recent"></div>
+  </div>
+  <div id="player" hidden>
+    <div class="ctl">
+      <button class="sk" id="prev" aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z" fill="currentColor"/></svg></button>
+      <button class="big" id="go">Play</button>
+      <button class="sk" id="next" aria-label="Forward"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z" fill="currentColor"/></svg></button>
+    </div>
+    <div class="now" id="now"></div>
+    <div class="row2"><button id="say">Comment or jump</button><button id="more" disabled>More of this</button></div>
+    <p class="tag">The key ideas</p>
+    <ul class="ideas" id="ideas"></ul>
+    <p class="note" style="margin-top:14px">Press Comment or jump, or the One Button, and say "jump to" an idea, "next", "back" or "more". Anything else is kept as your comment on that moment.</p>
+  </div>
+  <p class="note" id="msg"></p>
+  <audio id="a" preload="none"></audio><audio id="v" preload="none"></audio>
+</div>
+<script>
+/* Listening to key ideas: the session is built on the server from every conversation space, then
+ * played idea by idea. In the phone app, Android plays it (screen off, lock-screen controls);
+ * elsewhere this page does. Speaking at any point either steers (jump to an idea, next, back,
+ * more, pause) or leaves a comment on the moment, kept in your list. */
+(function(){
+  const $=s=>document.querySelector(s),esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const Q=new URLSearchParams(location.search),FN='https://us-central1-canopy-website-ef7a8.cloudfunctions.net/oneButton/api/space/';
+  const mmss=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+  function key(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}for(const w of [window.parent,window.top]){try{if(w!==window&&w.obKey)return w.obKey();}catch(e){}}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+  const K=key(),post=(r,b)=>fetch(FN+r,{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify(b||{})}).then(async x=>{const j=await x.json().catch(()=>({}));if(!x.ok)throw new Error(j.error||'no answer');return j;});
+  const NP=window.OBNative&&OBNative.podLoad?OBNative:null,A=$('#a'),V=$('#v');
+  let EP=null,i=-1,playing=false,NS=null,lastClip=-1,more=null,stopAt=0,priv=[],seq=0,started=0,waitT=0;
+  const now=(t,s)=>{$('#now').innerHTML=`<b>${esc(t)}</b>${s?`<div class="sub">${esc(s)}</div>`:''}`;};
+  const setGo=()=>{$('#go').textContent=playing?'Pause':(i>=0?'Carry on':'Play');};
+  const ideaOf=n=>EP&&EP.parts[n]?EP.parts[n].idea:-1;
+  function mark(){const k=ideaOf(i);document.querySelectorAll('#ideas li').forEach((li,n)=>li.classList.toggle('on',n===k));$('#more').disabled=lastClip<0;}
+  function tell(){try{window.top.OB_LISTEN={on:true,playing,title:EP&&EP.title};}catch(e){}}
+  // ---- the phone's player ----
+  function nativeState(js){try{NS=JSON.parse(js||'{}');}catch(e){return;}if(!EP||NS.title!==EP.title)return;
+    playing=!!NS.playing;i=NS.i;lastClip=NS.lastClip;setGo();mark();tell();if(i>=0)now(NS.now,NS.sub);else if(lastClip>=0)now('That is the session','Play it again, or tap an idea.');}
+  const onEvent=(k,id,txt)=>{if(k==='pod')nativeState(txt);};
+  window.obNativeEvent=window.obNativeEvent||onEvent;
+  window.addEventListener('message',e=>{const m=e.data&&e.data.obNative;if(m)onEvent(m[0],m[1],m[2]);});
+  const live=()=>NP&&NS&&EP&&NS.title===EP.title&&NS.i>=0;
+  // ---- this page's player ----
+  function stopAll(){seq++;A.pause();V.pause();clearTimeout(waitT);}
+  function sayPart(x,done){const my=seq;const fin=()=>{if(my===seq)done();};
+    if(x.src){V.src=x.src;V.onended=fin;V.onerror=fin;V.play().catch(fin);return;}
+    if(window.speechSynthesis&&window.SpeechSynthesisUtterance){const u=new SpeechSynthesisUtterance(x.text);u.onend=fin;u.onerror=fin;speechSynthesis.speak(u);return;}
+    waitT=setTimeout(fin,Math.max(3000,x.text.split(/\s+/).length*400));}
+  function clipPart(x,from,to,done){const my=seq;stopAt=to;priv=x.private||[];
+    const start=()=>{A.currentTime=from;A.play().catch(()=>done());};
+    if(A.dataset.src!==x.src){A.dataset.src=x.src;A.src=x.src;A.onloadedmetadata=()=>{A.onloadedmetadata=null;start();};A.load();}else start();
+    A.ontimeupdate=()=>{if(my!==seq)return;const t=A.currentTime,p=priv.find(([a,b])=>t>=a-0.3&&t<b);if(p){A.currentTime=p[1]+0.3;return;}if(t>=stopAt){A.pause();A.ontimeupdate=null;done();}};
+    A.onended=()=>{if(my===seq)done();};}
+  function go(n){
+    if(NP){OBNative.podLoad(JSON.stringify({title:EP.title,parts:EP.parts}),Math.max(0,n));return;}
+    stopAll();i=n;started=Date.now();const x=EP.parts[n];more=null;
+    if(!x){playing=false;i=-1;setGo();mark();tell();now('That is the session','Play it again, or tap an idea.');return;}
+    playing=true;setGo();mark();tell();
+    const next=()=>{if(playing)go(n+1);};
+    if(x.kind==='say'){now(x.label,x.text.slice(0,140));sayPart(x,next);return;}
+    lastClip=n;mark();now(x.label,`${x.space}: "${x.title}" at ${mmss(x.at)}`);clipPart(x,x.at,x.until,next);}
+  function doMore(){if(live()){OBNative.podCmd('more',0);return;}const n=lastClip;if(n<0)return;const x=EP.parts[n];
+    if(more){stopAt+=120;more.to+=120;now('More of "'+x.title+'"','Playing on to '+mmss(more.to)+'.');return;}
+    stopAll();playing=true;setGo();more={to:x.until+120};now('More of "'+x.title+'"','From '+mmss(Math.max(0,x.at-45))+' to '+mmss(more.to)+'.');
+    clipPart(x,Math.max(0,x.at-45),more.to,()=>{more=null;if(playing)go(n+1);});}
+  const step=d=>{if(live()){OBNative.podCmd(d<0?'prev':'next',0);return;}const back=d<0&&Date.now()-started>4000?0:d;go(Math.max(0,Math.min(EP.parts.length,(i<0?0:i)+back)));};
+  const pause=()=>{if(live()){OBNative.podCmd('pause',0);return;}playing=false;stopAll();setGo();tell();now('Paused','Carry on when you are ready.');};
+  const resume=()=>{if(live()){OBNative.podCmd('play',0);return;}go(i>=0?i:0);};
+  const jumpIdea=k=>{const n=EP.parts.findIndex(x=>x.idea===k);if(n<0)return;if(live())OBNative.podCmd('goto',n);else go(n);};
+  $('#go').onclick=()=>playing?pause():resume();$('#next').onclick=()=>step(1);$('#prev').onclick=()=>step(-1);$('#more').onclick=doMore;
+  // ---- speaking: steer, or comment on this moment ----
+  function where(){const n=i>=0?i:lastClip,x=EP&&EP.parts[n],c=EP&&EP.parts[lastClip];
+    return {session:EP&&EP.title,idea:x?x.label:'',space:c?c.space:'',conv:c?c.title:'',at:c?c.at:0};}
+  function said(text){const t=String(text||'').trim(),low=t.toLowerCase().replace(/[.!?,]/g,'');if(!t||!EP)return false;
+    // A finished session lets the button go back to ordinary notes.
+    if(i<0&&!playing&&lastClip>=0)return false;
+    const j=low.match(/^(?:please\s+)?(?:jump|go|skip|take me)\s+(?:back\s+)?(?:to\s+)?(?:the\s+)?(.+)$/);
+    if(j){const w=j[1].split(/\s+/).filter(x=>x.length>2&&!['idea','one','part','about','the'].includes(x));
+      const num={first:0,one:0,second:1,two:1,third:2,three:2,fourth:3,four:3,fifth:4,five:4,last:EP.ideas.length-1}[j[1].split(/\s+/)[0]];
+      let best=num!==undefined?num:-1,score=0;
+      if(best<0)EP.ideas.forEach((d,k)=>{const s=w.filter(x=>(d.name+' '+d.line).toLowerCase().includes(x)).length;if(s>score){score=s;best=k;}});
+      if(best>=0){jumpIdea(best);msg('Jumping to '+EP.ideas[best].name+'.');return true;}}
+    if(/^(next|skip|forward)\b/.test(low)){step(1);return true;}
+    if(/^(back|previous|go back|again)\b/.test(low)){step(-1);return true;}
+    if(/^(more|more of (that|this)|tell me more|longer)$/.test(low)){doMore();return true;}
+    if(/^(pause|stop|hold on|wait)$/.test(low)){pause();return true;}
+    if(/^(play|resume|carry on|continue|go on)$/.test(low)){resume();return true;}
+    // Anything else is a comment on where the listening has got to.
+    const w=where();let kept=false;try{if(window.top.obListenComment){window.top.obListenComment(t,w);kept=true;}}catch(e){}
+    msg(kept?'Kept your comment on "'+w.idea+'".':'Comment: '+t);if(!playing)resume();return true;}
+  window.obListenSaid=said;
+  const msg=m=>{$('#msg').textContent=m;};
+  let rec=null;
+  $('#say').onclick=async()=>{const b=$('#say');
+    if(rec){rec.stop();return;}
+    const was=playing;if(playing)pause();
+    let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true});}catch(e){msg('The microphone is not allowed here.');return;}
+    const chunks=[],mr=new MediaRecorder(stream);rec=mr;b.classList.add('on');b.textContent='Done';
+    mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+    mr.onstop=()=>{stream.getTracks().forEach(x=>x.stop());rec=null;b.classList.remove('on');b.textContent='Comment or jump';msg('Listening to what you said…');
+      const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'}),fr=new FileReader();
+      fr.onload=()=>fetch('/api/transcribe',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify({audio:String(fr.result).split(',')[1],mimeType:blob.type})})
+        .then(r=>r.json()).then(d=>{if(!said(d.text)){msg('Did not catch that.');if(was)resume();}}).catch(()=>{msg('Could not hear that, try again.');if(was)resume();});
+      fr.readAsDataURL(blob);};
+    mr.start();msg('Speak, then press Done.');};
+  // ---- getting a session ----
+  function show(e){EP=e;$('#start').hidden=true;$('#player').hidden=false;$('#title').textContent=e.title;$('#top').textContent='Listening . '+e.ideas.length+' key ideas';
+    $('#ideas').innerHTML=e.ideas.map((d,k)=>`<li><button data-k="${k}"><span class="n">${k+1}</span>${esc(d.name)}<span class="ln">${esc(d.line)}</span></button></li>`).join('');
+    document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>jumpIdea(+b.dataset.k));
+    try{history.replaceState(null,'',location.pathname+'?id='+encodeURIComponent(e.id));}catch(x){}
+    if(NP){try{OBNative.podCmd('state',0);}catch(x){}}
+    setTimeout(()=>{if(!(NS&&NS.title===e.title&&NS.i>=0))go(0);},NP?600:0);}
+  function build(q){$('#start').hidden=true;$('#title').textContent=q;now('Gathering the key ideas…','From all your conversations. This takes about 40 seconds.');$('#player').hidden=true;msg('Gathering the key ideas from all your conversations. This takes about 40 seconds.');
+    post('listen',{q}).then(e=>{msg('');if(e.none){msg('Nothing in your recorded conversations touches that yet.');start();return;}show(e);}).catch(err=>{msg(err.message);start();});}
+  function start(){$('#start').hidden=false;$('#player').hidden=true;
+    post('listened',{}).then(r=>{$('#recent').innerHTML=(r.recent||[]).length?'<p class="tag">Listen again</p>'+r.recent.map(x=>`<button class="link" data-id="${esc(x.id)}" style="display:block">${esc(x.title)}</button>`).join(''):'';
+      document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>post('listened',{id:b.dataset.id}).then(show).catch(e=>msg(e.message)));}).catch(()=>{});}
+  $('#q-go').onclick=()=>{const q=$('#q').value.trim();if(q)build(q);};$('#q').onkeydown=e=>{if(e.key==='Enter')$('#q-go').click();};
+  if(!K){msg('Open this from One Button.');return;}
+  if(Q.get('q'))build(Q.get('q'));else if(Q.get('id'))post('listened',{id:Q.get('id')}).then(show).catch(e=>{msg(e.message);start();});else start();
+  window.addEventListener('pagehide',()=>{try{window.top.OB_LISTEN=null;}catch(e){}});
+})();
+</script>
+</body>
+</html>

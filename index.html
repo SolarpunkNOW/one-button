@@ -437,7 +437,7 @@
     <button class="save" id="set-save">Save</button>
     <p class="note">Off: the lock screen shows only how many tasks are open. Words to listen for, separated by commas, get spelled right when you speak them. Names of your people, places and projects are listened for already.</p>
     <div style="height:26px"></div>
-    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-answers">Claude's answers</button><button class="tbtn" id="open-features">What's new and what it can do</button><button class="tbtn" id="link-device">Link another device</button></div>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-listen">Listen to key ideas</button><button class="tbtn" id="open-answers">Claude's answers</button><button class="tbtn" id="open-features">What's new and what it can do</button><button class="tbtn" id="link-device">Link another device</button></div>
     <p class="note hidden" id="link-note"></p>
     <button class="lk-upd hidden" id="set-upd" hidden style="margin:0 0 18px"></button>
     <label class="set-h">My places</label>
@@ -817,7 +817,24 @@ async function toClaude(t){
     catch{return 'could not reach Claude, tap to try again';}}
   if(FOR_CLAUDE.test(t)){try{await askClaudeDirect(t.replace(FOR_CLAUDE,'').trim()||t);return 'sent to Claude';}catch{return 'could not reach Claude, tap to try again';}}
   return '';}
+/* Listening, summoned by voice: "play me key ideas around flow funding" opens a session built
+ * from all your conversations and starts it. While one is open, what you say into the button
+ * steers it (jump to an idea, next, back, more, pause) or is kept as a comment on that moment. */
+const LISTEN_RE=/^\s*(?:hey\s+)?(?:can you\s+|could you\s+|please\s+)?(?:play|listen to)\s+(?:me\s+)?(?:the\s+|some\s+)?(?:(?:key|main|core|big)\s+ideas?|ideas|highlights|a podcast|the podcast|what we(?:'ve| have)? said|everything)?\s*(?:around|about|on|from|of|for)\s+(.+?)[.?!\s]*$/i;
+const LISTEN_RE2=/^\s*(?:a\s+)?podcast\s+(?:around|about|on|of)\s+(.+?)[.?!\s]*$/i;
+function openListen(q){if(lock.classList.contains('on'))hideLock();openSheet('#sheet-space');$('#sp-title').textContent='Listen';spFrame('/listen.html'+(q?'?q='+encodeURIComponent(q):''));}
+function listenFrame(){try{const f=$('#sp-frame').contentWindow;return $('#sheet-space').classList.contains('open')||window.OB_LISTEN?(f&&f.obListenSaid?f:null):null;}catch(e){return null;}}
+// Returns true when the words were for the listening session.
+function listenTake(text){const m=text.match(LISTEN_RE)||text.match(LISTEN_RE2);
+  if(m){openListen(m[1].trim());return 'listening';}
+  const f=window.OB_LISTEN&&listenFrame();if(f&&f.obListenSaid(text))return 'done';return false;}
+// A comment said while listening: kept in the list with where it was said.
+window.obListenComment=(text,w)=>{const at=w&&w.at?Math.floor(w.at/60)+':'+String(Math.floor(w.at%60)).padStart(2,'0'):'';
+  const where=`${w&&w.idea?w.idea:((w&&w.session)||'listening')}${w&&w.conv?', '+(w.space?w.space+': ':'')+w.conv+(at?' at '+at:''):''}`;
+  const note={id:Date.now(),text:text+' (comment on '+where+')',cat:'check',done:false,ts:Date.now(),subs:[],due:'',place:''};
+  notes.unshift(note);save();renderNotes();showToast('Comment kept: '+text.slice(0,60));};
 async function route(text){
+  {const l=listenTake(text);if(l){mainLive||(statusEl.textContent=l==='listening'?'gathering the key ideas…':'tap to speak');return;}}
   if(viewSaid(text)){mainLive||(statusEl.textContent='tap to speak');return;}
   {const s=await spendSaid(text);if(s){mainLive||(statusEl.textContent=s);return;}}
   {const said=await toClaude(text);if(said){mainLive||(statusEl.textContent=said);return;}}
@@ -2139,6 +2156,7 @@ async function lockText(t){
       {const s=await spendSaid(t);if(s){lock.classList.remove('busy');lkSay(s);return;}}
       // "Call Simon", "ring Simon on WhatsApp": from the lock screen too, recorder first, then the call.
       if(viewSaid(t)){lock.classList.remove('busy');return;}
+      {const l=listenTake(t);if(l){lock.classList.remove('busy');lkSay(l==='listening'?'gathering the key ideas':'done');return;}}
       {const m=t.match(new RegExp('^'+FILLER+/(?:call|ring|phone)\s+(.+?)(?:\s+on\s+(whatsapp|signal|telegram|the phone|phone))?[.!]?$/.source,'i'));
         if(m){const c=findContact(m[1]);lock.classList.remove('busy');
           if(!c){lkSay(`I don't have "${m[1]}" yet; add them in Settings`);return;}
@@ -2905,6 +2923,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdat
 function boot(){
   checkUpdate();
   $('#open-answers').onclick=()=>openAnswers();
+  $('#open-listen').onclick=()=>openListen('');
   $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('/features.html#new');};
   // Link the laptop or another phone: one link, used once, no key typed anywhere.
   $('#link-device').onclick=async()=>{const b=$('#link-device'),n=$('#link-note');b.disabled=true;n.classList.remove('hidden');n.textContent='Making the link…';
