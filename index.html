@@ -316,7 +316,7 @@
   @media (prefers-reduced-motion:reduce){.lock.rec .lk-orb{animation:none;outline:3px solid #FFFFFF;outline-offset:4px}.lk-item{transition:none}}
 </style>
 <script>if(window.OBNative)document.documentElement.classList.add("backend");</script>
-<script src="/skins/skin.js" data-page="main"></script>
+<script src="skins/skin.js" data-page="main"></script>
 </head>
 <body>
 <canvas id="myc"></canvas>
@@ -825,7 +825,7 @@ async function toClaude(t){
  * steers it (jump to an idea, next, back, more, pause) or is kept as a comment on that moment. */
 const LISTEN_RE=/^\s*(?:hey\s+)?(?:can you\s+|could you\s+|please\s+)?(?:play|listen to)\s+(?:me\s+)?(?:the\s+|some\s+)?(?:(?:key|main|core|big)\s+ideas?|ideas|highlights|a podcast|the podcast|what we(?:'ve| have)? said|everything)?\s*(?:around|about|on|from|of|for)\s+(.+?)[.?!\s]*$/i;
 const LISTEN_RE2=/^\s*(?:a\s+)?podcast\s+(?:around|about|on|of)\s+(.+?)[.?!\s]*$/i;
-function openListen(q){if(lock.classList.contains('on'))hideLock();openSheet('#sheet-space');$('#sp-title').textContent='Listen';spFrame('/listen.html'+(q?'?q='+encodeURIComponent(q):''));}
+function openListen(q){if(lock.classList.contains('on'))hideLock();openSheet('#sheet-space');$('#sp-title').textContent='Listen';spFrame('listen.html'+(q?'?q='+encodeURIComponent(q):''));}
 function listenFrame(){try{const f=$('#sp-frame').contentWindow;return $('#sheet-space').classList.contains('open')||window.OB_LISTEN?(f&&f.obListenSaid?f:null):null;}catch(e){return null;}}
 // Returns true when the words were for the listening session.
 function listenTake(text){const m=text.match(LISTEN_RE)||text.match(LISTEN_RE2);
@@ -1414,7 +1414,7 @@ function renderProjBoard(){const box=$('#proj-main');if(!box)return;
     +(people.length?`<div class="pb-top" style="margin-top:26px"><span class="sec-lbl">People</span></div><div class="cat-row" style="margin-bottom:0">`
       +people.map((x,i)=>`<button class="chip" data-ppl="${i}">${escapeHtml(x.name)}${x.n?' <small>'+x.n+'</small>':''}</button>`).join('')+'</div>':'')
     +'<div class="pb-cat" style="margin-top:26px">Tasks</div>';
-  box.querySelectorAll('[data-pss]').forEach(x=>x.onclick=()=>{const s=SEEDSPACES[+x.dataset.pss];openSheet('#sheet-space');$('#sp-title').textContent=s.name;spFrame('/s/?s='+encodeURIComponent(s.slug));});
+  box.querySelectorAll('[data-pss]').forEach(x=>x.onclick=()=>{const s=SEEDSPACES[+x.dataset.pss];openSheet('#sheet-space');$('#sp-title').textContent=s.name;spFrame('s/?s='+encodeURIComponent(s.slug));});
   box.querySelectorAll('[data-tsp]').forEach(x=>x.onclick=()=>{const sp=spaces[+x.dataset.tsp].sp;so[sp.slug]=!so[sp.slug];LS.set('ob-mainsp',so);renderProjBoard();});
   box.querySelectorAll('[data-osp]').forEach(x=>x.onclick=()=>spOpen(spaces[+x.dataset.osp].sp));
   box.querySelectorAll('[data-ppl]').forEach(x=>x.onclick=()=>{const p=people[+x.dataset.ppl];if(p.sp)spOpen(p.sp);else showToast('No space with '+p.name+' yet. Share a conversation with them to make one.');});
@@ -2475,7 +2475,7 @@ function renderSpaces(){
     row.querySelector('.tbtn').onclick=e=>spSend(sp,e.target);
     box.appendChild(row);}
 }
-function spOpen(sp){SP_FROM=$('#sheet-ivs').classList.contains('open')?'#sheet-ivs':'';openSheet('#sheet-space');$('#sp-title').textContent=sp.host?sp.name+' and you':'Jay and '+sp.name;spFrame('/space.html?s='+encodeURIComponent(sp.slug));}
+function spOpen(sp){SP_FROM=$('#sheet-ivs').classList.contains('open')?'#sheet-ivs':'';openSheet('#sheet-space');$('#sp-title').textContent=sp.host?sp.name+' and you':'Jay and '+sp.name;spFrame('space.html?s='+encodeURIComponent(sp.slug));}
 async function spSend(sp,btn){
   if(btn)btn.disabled=true;
   try{const r=await fetch(API+'/api/space/invite',{method:'POST',headers:obHeaders(),body:JSON.stringify({slug:sp.slug})});
@@ -2883,14 +2883,14 @@ function hasChange(id){return !!LS.get('ob-changes',{})[id]||(()=>{try{return JS
 function changesNew(){const seen=LS.get('ob-changes-seen',[]);return CHANGES.filter(c=>!seen.includes(c.id));}
 function openChanges(){hideLock();openSheet('#sheet-changes');renderChanges();
   // The notes may not have arrived yet (the app just reloaded): fetch them and draw again.
-  fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{if(v&&v.notes){NOTES=v.notes;renderChanges();}}).catch(()=>{});
+  fetch((API?API+'/':'')+'version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{if(v&&v.notes){NOTES=v.notes;renderChanges();}}).catch(()=>{});
   LS.set('ob-changes-seen',CHANGES.map(c=>c.id));checkUpdate();}
 // What changed, one plain line per deploy (from version.json), newest first. Seen ones stay, greyed.
 let NOTES=[],RELOAD_QUIET=false;
 function notesNew(){const seen=LS.get('ob-notes-seen','');return (NOTES||[]).filter(n=>n.at>seen);}
 // A newer page with nothing worth telling: reload quietly the next time the app comes back, never mid-recording.
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&RELOAD_QUIET&&!mainLive&&!lkLive&&!intOn)location.reload();});
-document.addEventListener('click',e=>{if(e.target&&e.target.id==='ch-check'){closeSheets();openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('/features.html#new');}});
+document.addEventListener('click',e=>{if(e.target&&e.target.id==='ch-check'){closeSheets();openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('features.html#new');}});
 function renderChanges(){const box=$('#changes-body'),on=LS.get('ob-changes',{}),fresh=changesNew().map(c=>c.id);
   const seenAt=LS.get('ob-notes-seen','');
   const notesHtml=(NOTES||[]).length?'<div class="iv-h" style="margin-top:0">What changed</div>'+NOTES.slice(0,20).map(n=>`<div class="note-item" style="cursor:default${n.at>seenAt?'':';opacity:.6'}"><div class="ntext">${escapeHtml(n.text)}<div class="nmeta">${new Date(n.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}${n.at>seenAt?' . new':''}</div></div></div>`).join('')+'<div class="iv-h" style="margin-top:18px">Changes to switch on</div>':'';
@@ -2916,7 +2916,7 @@ function renderBar(){const n=NOTICE&&(!NOTICE.until||Date.now()<NOTICE.until)?NO
 function checkUpdate(){
   // The newest phone build: what the build pipeline last handed to the server, else the stamp on the site.
   const appInfo=obKey()?fetch(API+'/api/app/info',{method:'POST',headers:obHeaders(),body:'{}'}).then(r=>r.ok?r.json():{}).catch(()=>({})):Promise.resolve({});
-  Promise.all([fetch((API||'')+'/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null),appInfo]).then(([v,ai])=>{
+  Promise.all([fetch((API?API+'/':'')+'version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.json():null),appInfo]).then(([v,ai])=>{
     if(!v)return;
     if(ai&&ai.build>(v.android||0))v.android=ai.build;
     NOTES=v.notes||NOTES;
@@ -2942,7 +2942,7 @@ function boot(){
   checkUpdate();
   $('#open-answers').onclick=()=>openAnswers();
   $('#open-listen').onclick=()=>openListen('');
-  $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('/features.html#new');};
+  $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('features.html#new');};
   // Link the laptop or another phone: one link, used once, no key typed anywhere.
   $('#link-device').onclick=async()=>{const b=$('#link-device'),n=$('#link-note');b.disabled=true;n.classList.remove('hidden');n.textContent='Making the link…';
     try{const r=await fetch(API+'/api/person/link',{method:'POST',headers:obHeaders(),body:JSON.stringify({device:'browser'})});const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);

@@ -37,7 +37,7 @@
   .nw textarea{width:100%;font:15px "Inter",sans-serif;padding:8px;border:1px solid #1A1A1A;margin-top:8px;min-height:64px}
   .nw .done{font:600 13px "Inter",sans-serif}
 </style>
-<script src="/skins/skin.js"></script>
+<script src="skins/skin.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -145,7 +145,7 @@
   const API=/^(one-button-jay\.web\.app|localhost|127\.0\.0\.1)$/.test(location.hostname)||/--/.test(location.hostname)?'':'https://one-button-jay.web.app';
   function key(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
   const K=key(),post=(r,b)=>fetch(API+'/api/check/'+r,{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify(b||{})}).then(x=>x.json());
-  Promise.all([fetch('/version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),K?post('list').catch(()=>({checks:[]})):Promise.resolve({checks:[]})]).then(([v,c])=>{
+  Promise.all([fetch('version.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),K?post('list').catch(()=>({checks:[]})):Promise.resolve({checks:[]})]).then(([v,c])=>{
     const notes=(v.notes||[]).slice(0,20),mine={};(c.checks||[]).forEach(x=>{mine[x.note]=x;});
     const draw=()=>{$('#new-list').innerHTML=notes.length?notes.map(n=>{const ck=mine[n.at];
       return `<div class="nw" data-n="${esc(n.at)}"><div class="when">${esc(new Date(n.at).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</div><div>${esc(n.text)}</div>

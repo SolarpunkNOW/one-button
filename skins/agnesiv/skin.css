@@ -4,9 +4,9 @@
    interface colours pink #FF2E88, yellow #FFE014, green #2EE06E, watercolour on the record button only. */
 
 /* Fonts: the pages ask for Inter / Inter Tight; these faces answer with Source Sans 3 / Jost. */
-@import url('/skins/agnesiv/fonts.css');
-@import url('/skins/agnesiv/frames.css');
-@import url('/skins/agnesiv/frames-sub.css');
+@import url('fonts.css');
+@import url('frames.css');
+@import url('frames-sub.css');
 
 :root{
   --cream:#FFFFFF; --cream-2:#F6F3EA; --forest:#FFFFFF; --forest-2:#141414;
@@ -28,10 +28,10 @@ canvas#myc{display:none}
 .pj-h{border-bottom:2px solid var(--ink)}
 
 /* The record button: Agnes's watercolour bloom with an open ink contour */
-.orb,.mini-orb,.lk-orb{background:transparent url('/skins/agnesiv/orb.svg') center/100% no-repeat !important;border-radius:0 !important;
+.orb,.mini-orb,.lk-orb{background:transparent url('orb.svg') center/100% no-repeat !important;border-radius:0 !important;
   box-shadow:none !important;color:#141414}
-.orb.busy{background-image:url('/skins/agnesiv/orb-busy.svg') !important}
-.listening .orb,.mini-orb.live,.lock.rec .lk-orb{background-image:url('/skins/agnesiv/orb-live.svg') !important}
+.orb.busy{background-image:url('orb-busy.svg') !important}
+.listening .orb,.mini-orb.live,.lock.rec .lk-orb{background-image:url('orb-live.svg') !important}
 .orb-dot{background:#141414;box-shadow:none;width:11px;height:11px}
 .ring{border-color:rgba(255,46,136,.35)}
 .ring.r2{border-color:rgba(255,224,20,.5)}

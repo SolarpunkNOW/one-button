@@ -37,7 +37,7 @@
   .ask{display:flex;gap:8px;margin:10px 0}
   .ask input{flex:1;font:16px "Inter",sans-serif;padding:10px;border:1px solid var(--ink);min-width:0}
 </style>
-<script src="/skins/skin.js"></script>
+<script src="skins/skin.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -158,7 +158,7 @@
   function drawHome(e){const h=e.home,box=$('#home');if(!h){box.innerHTML='';return;}
     box.innerHTML=`${h.created?'A new subspace for this theme, ':'From your subspace '}<b>${esc(h.name)}</b> in your space with ${esc(h.space)}.${e.reused?' Nothing new since last time, so this is the same session.':''}
       <div style="margin-top:6px"><button class="link" id="h-open">Open the subspace</button>${(h.others||[]).length?` . <button class="link" id="h-ask">Ask to add ${h.others.length} conversation${h.others.length>1?'s':''} from other spaces</button>`:''} . <button class="link" id="h-fresh">Make a fresh session</button></div><div id="h-say"></div>`;
-    $('#h-open').onclick=()=>{location.href='/space.html?s='+encodeURIComponent(h.slug)+'&topic='+encodeURIComponent(h.topic);};
+    $('#h-open').onclick=()=>{location.href='space.html?s='+encodeURIComponent(h.slug)+'&topic='+encodeURIComponent(h.topic);};
     $('#h-fresh').onclick=()=>{stopAll();if(NP)try{OBNative.podCmd('stop',0);}catch(x){}post('listen',{q:e.q,fresh:true}).then(show).catch(x=>msg(x.message));msg('Making a fresh session…');};
     const ask=$('#h-ask');if(ask)ask.onclick=()=>{ask.disabled=true;
       fetch('/api/space/gather',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify({slug:h.slug,topic:h.topic,picks:h.others.map(o=>({slug:o.slug,conv:o.conv}))})}).then(r=>r.json())

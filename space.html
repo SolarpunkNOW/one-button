@@ -86,7 +86,7 @@
   .dim{opacity:.35;transition:opacity .2s}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
-<script src="/skins/skin.js"></script>
+<script src="skins/skin.js"></script>
 </head>
 <body>
 <script>if(new URLSearchParams(location.search).get('pod')==='1')document.documentElement.classList.add('podonly');</script>
@@ -297,7 +297,7 @@ $('#since').textContent=D.since;
     $('#topicbar').innerHTML=`<div class="box" style="border-color:var(--ink)"><span class="tag">Subspace</span><h3 style="margin:2px 0">${esc(tp.name)}</h3><div>${esc(tp.about||'')}</div>
       <p class="tag" style="margin:8px 0 0">${D.convs.length} of ${FULL.convs.length} conversations touch it . private to the people in this space</p>
       ${ACT&&ACT.key&&!D.asMember?`<div class="row"><button id="g-add">Add conversations to this subspace</button></div>`:''}
-      <div class="row"><a class="btn" href="${base}">Back to the whole space</a>${ss?`<a class="btn" href="/s/?s=${esc(ss.slug)}" target="_blank" rel="noopener">Its public seed space</a>${ss.parent!==SLUG&&ACT&&ACT.key?`<button id="tp-attach">Make it this subspace's public face</button>`:''}`:(ACT&&ACT.key?`<button id="tp-make">Open a public seed space for it</button>`:'')}</div></div>`;
+      <div class="row"><a class="btn" href="${base}">Back to the whole space</a>${ss?`<a class="btn" href="s/?s=${esc(ss.slug)}" target="_blank" rel="noopener">Its public seed space</a>${ss.parent!==SLUG&&ACT&&ACT.key?`<button id="tp-attach">Make it this subspace's public face</button>`:''}`:(ACT&&ACT.key?`<button id="tp-make">Open a public seed space for it</button>`:'')}</div></div>`;
     const mk=$('#tp-make')||$('#tp-attach');if(mk)mk.onclick=()=>{mk.disabled=true;post('../ss/create',{slug:TOPIC,name:tp.name,about:tp.about||'',words:tp.words||[],parent:SLUG},headers()).then(()=>{SSLIST=null;say('Its public seed space is ready. Everyone in this space is a member.');loadSSList().then(()=>{LAST='';render(FULL);});}).catch(e=>{mk.disabled=false;say(e.message);});};}
   else $('#topicbar').innerHTML=(tps.length?`<div class="row" style="margin-top:4px"><span class="tag">Subspaces</span>${tps.map(x=>`<a class="btn" href="${base}&topic=${encodeURIComponent(x.slug)}">${esc(x.name)}</a>`).join('')}</div>`:'')
     +(ACT&&ACT.key&&!D.asMember?`<div class="row"><button class="link" id="g-new">Make a subspace from conversations</button></div>`:'');
@@ -463,7 +463,7 @@ window.__tpIds=D.topicIds||null;
 $('#back').onclick=()=>{const tp=new URLSearchParams(location.search).get('topic');
   if(tp){location.href=location.pathname+'?s='+encodeURIComponent(SLUG);return;}
   try{if(window.parent!==window&&window.parent.closeSheets){window.parent.closeSheets();return;}}catch(e){}
-  if(history.length>1)history.back();else location.href='/';};
+  if(history.length>1)history.back();else location.href='./';};
 // People mentioned: found on request (it reads every conversation), decided line by line.
 const drawMentions=r=>{const hits=(r.hits||[]).filter(x=>!D.topicIds||D.topicIds.has(x.conv));
   $('#mn-say').textContent=hits.length?hits.length+' line'+(hits.length===1?'':'s')+' name someone'+(hits.filter(x=>x.sensitive).length?', '+hits.filter(x=>x.sensitive).length+' look sensitive':''):'No mentions left to look at.';
@@ -487,7 +487,7 @@ function loadSeeds(){if(!ACT)return;actCall('seeds',{slug:SLUG}).then(r=>Promise
       <div class="row">${Object.entries(s.consent||{}).map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ')}</div>
       <div class="row">${mine&&mine!=='ok'?`<button data-sok="${esc(s.id)}">Yes, this seed can travel</button>`:''}${s.status!=='public'&&(s.by===me||me==='jay')?`<button class="link" data-sdrop="${esc(s.id)}">Drop it</button>`:''}${mine&&mine!=='no'?`<button class="link" data-sno="${esc(s.id)}">${s.status==='public'?'Take it back':'Not this one'}</button>`:''}
         ${all&&!s.seedSpace&&ss.length?`<select data-sto="${esc(s.id)}"><option value="">Put into a seed space...</option>${ss.map(x=>`<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join('')}</select>`:''}
-        ${s.seedSpace?`<a href="/s/?s=${esc(s.seedSpace)}" target="_blank" rel="noopener">Open the seed space</a>`:''}</div></div>`;}).join(''):'<p class="tag">No seeds yet. Tap Harvest seeds on a conversation.</p>';
+        ${s.seedSpace?`<a href="s/?s=${esc(s.seedSpace)}" target="_blank" rel="noopener">Open the seed space</a>`:''}</div></div>`;}).join(''):'<p class="tag">No seeds yet. Tap Harvest seeds on a conversation.</p>';
   wireProv();
   document.querySelectorAll('[data-sok],[data-sno]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('seedok',{slug:SLUG,id:b.dataset.sok||b.dataset.sno,ok:!!b.dataset.sok}).then(loadSeeds).catch(e=>{b.disabled=false;say(e.message);});});
   document.querySelectorAll('[data-sdrop]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('seeddrop',{slug:SLUG,id:b.dataset.sdrop}).then(loadSeeds).catch(e=>{b.disabled=false;say(e.message);});});
@@ -644,7 +644,7 @@ document.querySelectorAll('[data-hlcopy]').forEach(b=>b.onclick=()=>{try{navigat
 // Preview: the public page drawn from what is here now, before anyone has said yes. Nothing is published.
 document.querySelectorAll('[data-hlprev]').forEach(b=>b.onclick=()=>{const h=hls.find(x=>x.id===b.dataset.hlprev);if(!h)return;
   const pv={title:h.title,when:h.when,points:h.points||[],quotes:h.quotes||[],slides:h.slides||null,people:D.people.map(p=>p.name),convTitles:(h.convs||[]).map(id=>({title:conv(id).title,date:conv(id).date}))};
-  try{localStorage.setItem('hl-preview',JSON.stringify(pv));}catch(e){}window.open('/h/?preview=1','_blank');});
+  try{localStorage.setItem('hl-preview',JSON.stringify(pv));}catch(e){}window.open('h/?preview=1','_blank');});
 document.querySelectorAll('[data-hlback]').forEach(b=>b.onclick=()=>{b.disabled=true;hlCall('publish',{slug:SLUG,doc:b.dataset.hlback,to:'private'})
   .then(()=>{say('The public page is gone. The highlight stays here.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});
 const sels=document.querySelectorAll('[data-hlto]');

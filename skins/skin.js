@@ -8,8 +8,9 @@
   }catch(e){}
   if(s==='plain') return;
   var r=document.documentElement; r.classList.add('skin-'+s);
-  var path=location.pathname, me=document.currentScript; if(!(me&&me.getAttribute('data-page')==='main')) r.classList.add('agv-sub'); if(/^\/b\//.test(path)) r.classList.add('agv-b');
-  document.write('<link rel="stylesheet" href="/skins/'+s+'/skin.css">');
+  var path=location.pathname, me=document.currentScript; if(!(me&&me.getAttribute('data-page')==='main')) r.classList.add('agv-sub'); if(/\/b\//.test(path)) r.classList.add('agv-b');
+  var base=(me&&me.src)?me.src.replace(/skin\.js(\?.*)?$/,''):'skins/';
+  document.write('<link rel="stylesheet" href="'+base+s+'/skin.css">');
   var meta=document.querySelector('meta[name=theme-color]'); if(meta) meta.content='#FFFFFF';
   addEventListener('DOMContentLoaded',function(){
     var spot=document.querySelector('#sheet-settings .sheet-body')||document.querySelector('.wrap')||document.body;

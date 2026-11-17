@@ -40,7 +40,7 @@
   .foot{margin-top:36px;color:var(--muted);font-size:14px}
   a{color:var(--ink)}
 </style>
-<script src="/skins/skin.js"></script>
+<script src="../skins/skin.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -86,11 +86,11 @@ function render(d){
     <p class="tag">${d.members} member${d.members===1?'':'s'}${d.named.length?' . including '+esc(d.named.join(', ')):''} . ${pub.length} seed${pub.length===1?'':'s'} . ${d.links.length} linked conversation${d.links.length===1?'':'s'}</p>
     ${M?`<div class="me">You are a member. ${d.me.show?'Your name shows on what you add.':'You are anonymous here: what you add shows as "a member".'} <button class="link" id="optin">${d.me.show?'Go anonymous':'Show my name'}</button></div>`:''}
     <p id="say" class="me" hidden></p>
-    ${M&&d.parent?`<h2>Listen</h2><p class="lede">The podcast of this subspace: a short introduction, then the moments from your conversations. Only members hear it.</p><iframe title="Podcast" src="/space.html?s=${encodeURIComponent(d.parent)}&topic=${encodeURIComponent(SLUG)}&pod=1" style="width:100%;height:470px;border:0;background:transparent" allow="autoplay; microphone"></iframe>`:''}
+    ${M&&d.parent?`<h2>Listen</h2><p class="lede">The podcast of this subspace: a short introduction, then the moments from your conversations. Only members hear it.</p><iframe title="Podcast" src="../space.html?s=${encodeURIComponent(d.parent)}&topic=${encodeURIComponent(SLUG)}&pod=1" style="width:100%;height:470px;border:0;background:transparent" allow="autoplay; microphone"></iframe>`:''}
     ${M0?`<div class="row"><button id="pv" class="${PREVIEW?'on':''}">${PREVIEW?'Back to my view':'Preview the public page'}</button><span class="tag">${PREVIEW?'This is what anyone with the link will see, with your waiting seeds shown dashed as if agreed.':'See it as the public will, including seeds still waiting for a yes.'}</span></div>`:''}
     ${M&&(d.mine||[]).length?`<h2>From your conversations</h2><p class="lede">Seeds from conversations you were in that fit this space. Only the people in each conversation see these here. Each comes in when everyone in its conversation has said yes.</p>
       ${d.mine.map(s=>`<div class="box"><span class="tag">${esc(s.kind)} . from "${esc(s.convTitle||'')}" . ${s.waiting.length?'waiting for '+esc(s.waiting.join(', '))+' to say yes':'everyone said yes'}${s.intended?' . set to come here':''}</span><h3>${esc(s.title)}</h3><div>${esc(s.about)}</div>${s.quote?`<div class="q">${s.at?'At '+mmss(s.at)+': ':''}"${esc(s.quote)}"</div>`:''}
-        <div class="row">${s.waiting.length?(s.intended?'<span class="tag">It arrives here by itself on the last yes.</span>':`<button data-bring="${esc(s.id)}">Bring it here when everyone says yes</button>`):`<button data-bring="${esc(s.id)}">Put it in now</button>`}<a class="link" href="/space.html?s=${esc(s.origin)}" target="_blank" rel="noopener">Open its conversation space</a></div></div>`).join('')}`:''}
+        <div class="row">${s.waiting.length?(s.intended?'<span class="tag">It arrives here by itself on the last yes.</span>':`<button data-bring="${esc(s.id)}">Bring it here when everyone says yes</button>`):`<button data-bring="${esc(s.id)}">Put it in now</button>`}<a class="link" href="../space.html?s=${esc(s.origin)}" target="_blank" rel="noopener">Open its conversation space</a></div></div>`).join('')}`:''}
     <h2>How it connects</h2><p class="lede">Seeds, the conversations they came from, and the conversations people have linked in.</p><svg id="map" role="img" aria-label="Map of seeds and conversations"></svg>
     <h2>Seeds</h2>${pub.length?pub.map(seed).join(''):'<p class="lede">No seeds yet.</p>'}
     ${M&&off.length?`<h2>Offered, waiting for a member</h2>${off.map(seed).join('')}`:''}
