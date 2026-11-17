@@ -1952,6 +1952,7 @@ $('#set-save').onclick=()=>{let k=$('#set-key').value.trim();const m=k.match(/[?
 // The phone's back gesture closes whatever sheet is open. Each open sheet holds one history
 // step; closing a sheet any other way gives that step back. A space page in the frame is loaded
 // with replace, so it never adds steps of its own that back would have to walk through first.
+window.obNativeEvent=(k,id,txt)=>{try{$('#sp-frame').contentWindow.postMessage({obNative:[k,id,txt]},'*');}catch(e){}};
 function spFrame(url){const f=$('#sp-frame');try{f.contentWindow.location.replace(new URL(url,location.href).href);}catch(e){f.src=url;}}
 const sheetOpen=()=>!!document.querySelector('.sheet.open');
 window.addEventListener('popstate',()=>{if(sheetOpen()){SP_FROM='';spFrame('about:blank');closeSheets(true);}});

@@ -15,6 +15,7 @@ const OPENROUTER_KEY = defineSecret("OPENROUTER_KEY");
 const GROQ_KEY = defineSecret("GROQ_KEY");
 const ONE_BUTTON_KEY = defineSecret("ONE_BUTTON_KEY");
 const WEAVE_ADMIN_KEY = defineSecret("WEAVE_ADMIN_KEY");
+const FAL_KEY = defineSecret("FAL_KEY");
 
 const CHAT_MODEL = "anthropic/claude-sonnet-4.6";
 const WHISPER_MODEL = "whisper-large-v3-turbo";
@@ -1513,6 +1514,128 @@ async function widen(q, hint) {
 const askCol = () => listRef().collection("interrogations");
 // These read across all of Jay's spaces, so only Jay's own key opens them.
 const keyOk = async (req) => { const p = await whoIs(req); return !!(p && p.name === "jay"); };
+/* ---------- The podcast of a space ----------
+ * A spoken synopsis of the space (or one subspace), with the liveliest moments played from the
+ * recordings themselves, each introduced in a sentence. Recordings stream in small pieces through a
+ * signed address that lasts a few hours, so a phone fetches only the seconds it plays. Privately
+ * marked stretches are never chosen and are skipped in playback. Spoken parts are in the Metamyth
+ * voice (Kokoro's George) when fal answers; otherwise the page has the phone read them. */
+const PODCAST_SYS = (names, topic) => `You make a short audio episode from conversations between ${names}${topic ? `, about ${topic}` : ""}, for the people in them to listen back. Lines start with a marker like [c2@431] (conversation c2, second 431). Only conversations marked "has recording" can be played. Reply with JSON only:
+{"title": "at most 8 words",
+ "intro": "the spoken synopsis, 90 to 150 words, warm and plain: what the conversations covered, what is taking shape, where it is heading",
+ "clips": [{"ref": "c2@431", "until": 470, "lead": "one spoken sentence introducing this moment: who is talking and about what", "about": "3 to 6 words"}],
+ "outro": "spoken, 40 to 80 words: what is still open and what could happen next"}
+4 to 7 clips, each 20 to 60 seconds, the most alive moments where an idea lands or turns, spread across the conversations, in an order that tells the story. "until" is the second the clip ends, at a natural pause. Never anything negative or reflective about any person's personality, character or state of mind. Written to be heard: short sentences, no lists, no markers in the spoken text, no em dashes.`;
+const podRef = (slug, topic) => listRef().collection("podcasts").doc(slug + "__" + (topic || "all"));
+const podFile = (slug, id, n) => admin.storage().bucket().file(`onebutton/podcasts/${slug}/${id}/${n}.wav`);
+// A signed address for one stored audio file: the path and an expiry, sealed with the app's key.
+const seal = (path, hours = 8) => { const exp = Date.now() + hours * 3600e3, p = Buffer.from(path).toString("base64url"); return `${p}.${exp}.${crypto.createHmac("sha256", ONE_BUTTON_KEY.value()).update(p + "." + exp).digest("base64url")}`; };
+const unseal = (tk) => { const [p, exp, sig] = String(tk || "").split("."); if (!p || !exp || !sig || +exp < Date.now()) return null;
+  const want = crypto.createHmac("sha256", ONE_BUTTON_KEY.value()).update(p + "." + exp).digest("base64url"); if (sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return null;
+  const path = Buffer.from(p, "base64url").toString(); return /^onebutton\/(interviews|spaces|podcasts)\/[\w\/.-]+$/.test(path) ? path : null; };
+const STREAM_BASE = "https://us-central1-canopy-website-ef7a8.cloudfunctions.net/oneButton/api/space/stream?t=";
+async function spStream(req, res) {
+  const path = unseal(req.query.t);
+  if (!path) { res.status(403).json({ error: "this link has run out; open the podcast again" }); return; }
+  const f = admin.storage().bucket().file(path);
+  const [meta] = await f.getMetadata().catch(() => [null]);
+  if (!meta) { res.status(404).json({ error: "the recording is no longer on the server" }); return; }
+  const size = +meta.size, type = meta.contentType || (path.endsWith(".wav") ? "audio/wav" : "audio/mp4");
+  res.set({ "Accept-Ranges": "bytes", "Content-Type": type, "Cache-Control": "private, max-age=3600" });
+  const m = String(req.headers.range || "").match(/bytes=(\d*)-(\d*)/);
+  if (m && (m[1] || m[2])) {
+    let start = m[1] ? +m[1] : Math.max(0, size - +m[2]), end = m[1] && m[2] ? Math.min(+m[2], size - 1) : size - 1;
+    if (start >= size) { res.status(416).set("Content-Range", `bytes */${size}`).end(); return; }
+    res.status(206).set({ "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(end - start + 1) });
+    f.createReadStream({ start, end }).on("error", () => res.end()).pipe(res);
+  } else { res.status(200).set("Content-Length", String(size)); f.createReadStream().on("error", () => res.end()).pipe(res); }
+}
+// The podcast voice is the Metamyth one: Kokoro, British English, "bm_george" at 0.95 speed, on fal.
+async function voice(text) {
+  const r = await fetch("https://fal.run/fal-ai/kokoro/british-english", { method: "POST", headers: { Authorization: "Key " + FAL_KEY.value(), "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: String(text).replace(/\s+/g, " ").trim().slice(0, 4000), voice: "bm_george", speed: 0.95 }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.audio || !j.audio.url) throw new Error((j.detail && String(j.detail).slice(0, 80)) || "voice " + r.status);
+  const a = await fetch(j.audio.url);
+  if (!a.ok) throw new Error("voice file " + a.status);
+  return Buffer.from(await a.arrayBuffer());
+}
+async function spPodcast(req, body, visitor) {
+  const slug = String(body.slug || ""), topic = String(body.topic || "").slice(0, 40);
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const by = await actorFor(req, body, slug, visitor);
+  const s = await migrateSpace(slug, await spaceRef(slug).get());
+  if (!s.exists) return [404, { error: "no such space" }];
+  const d = withAdded(s), people = ((s.data().data || {}).people || []), marks = await marksOf(slug);
+  const tp = topic ? (((d.synth || {}).topics || []).find((x) => x.slug === topic) || { name: topic.replace(/-/g, " "), words: [topic.replace(/-/g, " ")] }) : null;
+  const words = tp ? (tp.words || []).map((w) => String(w).toLowerCase()) : [];
+  const fits = (c) => !tp || words.some((w) => [c.title, c.summary, ...(c.points || [])].join(" ").toLowerCase().includes(w));
+  const convs = (d.convs || []).filter((c) => !c.held && fits(c));
+  const key = convs.map((c) => c.id).join(",") + "|" + marks.filter((m) => m.kind === "private").length;
+  const ref = podRef(slug, topic), had = (await ref.get()).data();
+  // Signed addresses are made fresh each time; the episode itself is kept until the conversations change.
+  const withLinks = (ep) => ({ ...ep, audio: Object.fromEntries(Object.entries(ep.files || {}).map(([cid, path]) => [cid, STREAM_BASE + seal(path)])),
+    parts: (ep.parts || []).map((x) => ({ ...x, src: x.file ? STREAM_BASE + seal(x.file) : "" })) });
+  if (had && had.key === key && !body.fresh) {
+    // Made with the phone's voice because George's was not reachable: try again, at most every ten minutes.
+    if (had.voice === "phone" && Date.now() - (had.voiceTried || 0) > 600e3) {
+      try { await Promise.all(had.parts.map(async (x, n) => { if (x.kind !== "say") return; const f = podFile(slug, had.id, n); await f.save(await voice(x.text), { contentType: "audio/wav", resumable: false }); x.file = f.name; }));
+        had.voice = "george"; had.voiceWhy = ""; }
+      catch (e) { had.parts.forEach((x) => { delete x.file; }); had.voiceWhy = String(e.message || e); }
+      had.voiceTried = Date.now(); await ref.set(had);
+    }
+    return [200, withLinks(had)];
+  }
+  if (!convs.length) return [200, { none: true, title: tp ? tp.name : "This space", parts: [] }];
+  const files = {}, hasAudio = new Set();
+  for (const c of convs) {
+    if (!c.audio) continue;
+    const f = c.by && c.by !== "jay" ? spaceAudio(slug, c.id) : audioFile(c.iv || c.id);
+    const [ok] = await f.exists().catch(() => [false]);
+    if (ok) { files[c.id] = f.name; hasAudio.add(c.id); }
+  }
+  const segsOf = {}, blocks = [];
+  for (const c of convs) {
+    const w = await wordsFor(slug, c), segs = (w.segments || []).filter((x) => x && x[1]);
+    segsOf[c.id] = segs;
+    let lines = segs.map(([at, x]) => `[${c.id}@${Math.round(at)}] ${x}`);
+    if (tp && lines.length > 200) { const hit = new Set(); segs.forEach(([, x], i) => { if (words.some((w2) => String(x).toLowerCase().includes(w2))) for (let j = i - 3; j <= i + 6; j++) hit.add(j); }); lines = lines.filter((_, i) => hit.has(i)); }
+    const step = Math.max(1, Math.ceil(lines.length / 260));
+    blocks.push(`## ${c.id}: ${c.title} (${c.date})${hasAudio.has(c.id) ? " has recording" : " no recording"}\nSummary: ${String(c.summary || "").slice(0, 700)}\n${lines.filter((_, i) => i % step === 0 || !hasAudio.has(c.id)).slice(0, 300).join("\n")}`);
+  }
+  const names = people.map((x) => x.name).join(" and ");
+  const out = await chat({ messages: [{ role: "system", content: PODCAST_SYS(names, tp && tp.name) }, { role: "user", content: blocks.join("\n\n").slice(0, 100000) }] }, 3500);
+  let ep = null;
+  try { ep = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
+  if (!ep || !ep.intro) return [502, { error: "the episode did not come together this time; try again" }];
+  const priv = (cid) => marks.filter((m) => m.kind === "private" && m.conv === cid).map((m) => [m.from, m.to]);
+  const clips = (Array.isArray(ep.clips) ? ep.clips : []).map((x) => {
+    const m = String(x && x.ref || "").replace(/[\[\]]/g, "").match(/^([\w-]+)@(\d+(?:\.\d+)?)$/);
+    if (!m || !hasAudio.has(m[1])) return null;
+    const segs = segsOf[m[1]] || []; let at = +m[2];
+    const snap = segs.filter(([a]) => a <= at + 0.5).pop(); if (snap) at = snap[0];
+    let until = Number(x.until) || at + 40; if (until < at + 15) until = at + 40; if (until > at + 75) until = at + 75;
+    if (priv(m[1]).some(([a, b]) => at < b && until > a)) return null;
+    const c = convs.find((y) => y.id === m[1]);
+    return { conv: m[1], title: c.title, at: Math.round(at), until: Math.round(until), lead: String(x.lead || "").slice(0, 300), about: String(x.about || "").slice(0, 80) };
+  }).filter(Boolean).slice(0, 7);
+  const id = "e" + Date.now().toString(36);
+  const parts = [{ kind: "say", text: String(ep.intro).slice(0, 1500), label: "Synopsis" }];
+  for (const c of clips) { if (c.lead) parts.push({ kind: "say", text: c.lead, label: c.about || c.title }); parts.push({ kind: "clip", ...c, label: c.about || c.title, private: priv(c.conv) }); }
+  if (ep.outro) parts.push({ kind: "say", text: String(ep.outro).slice(0, 800), label: "Where it is heading" });
+  // The spoken parts, in George's voice when fal answers; the first refusal stops the rest.
+  let voiced = true, why = "";
+  await Promise.all(parts.map(async (x, n) => {
+    if (x.kind !== "say" || !voiced) return;
+    try { const wav = await voice(x.text); const f = podFile(slug, id, n); await f.save(wav, { contentType: "audio/wav", resumable: false }); x.file = f.name; }
+    catch (e) { voiced = false; why = String(e.message || e); }
+  }));
+  if (!voiced) parts.forEach((x) => { delete x.file; });
+  const episode = { key, id, title: String(ep.title || (tp ? tp.name : "This space")).slice(0, 120), topic, made: Date.now(), by: by.id, parts, files, voice: voiced ? "george" : "phone", voiceWhy: why };
+  await ref.set(episode);
+  return [200, withLinks(episode)];
+}
+
 async function spAskAll(req, body, visitor) {
   const q = String(body.q || "").trim().slice(0, 500);
   if (!q) return [400, { error: "ask a question" }];
@@ -2415,7 +2538,7 @@ const IV_ROUTES = { list: ivList, transcript: ivTranscript, ask: ivAsk, pending:
 const SP_ROUTES = { save: spSave, list: spList, get: spGet, invite: spInvite, code: spCode, person: spForPerson };
 
 exports.oneButton = onRequest(
-  { secrets: [OPENROUTER_KEY, GROQ_KEY, ONE_BUTTON_KEY, WEAVE_ADMIN_KEY], region: "us-central1", timeoutSeconds: 300, memory: "512MiB" },
+  { secrets: [OPENROUTER_KEY, GROQ_KEY, ONE_BUTTON_KEY, WEAVE_ADMIN_KEY, FAL_KEY], region: "us-central1", timeoutSeconds: 300, memory: "512MiB" },
   async (req, res) => {
     // Forks of the page live on other hosts and reach this one server; the shared page on Canopy
     // reads spaces from here too. The key or the Weave token is the lock, never the origin.
@@ -2426,6 +2549,7 @@ exports.oneButton = onRequest(
       res.set("Access-Control-Allow-Methods", "POST,OPTIONS");
       if (req.method === "OPTIONS") { res.status(204).send(""); return; }
     }
+    if (req.method === "GET" && /\/space\/stream$/.test(req.path)) { try { await spStream(req, res); } catch (e) { if (!res.headersSent) res.status(500).json({ error: String((e && e.message) || e) }); } return; }
     if (req.method !== "POST") { res.status(405).json({ error: "POST only" }); return; }
     const body = req.body || {};
     const sp = req.path.match(/\/space\/(\w+)$/);
@@ -2456,7 +2580,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "podcast", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2468,7 +2592,7 @@ exports.oneButton = onRequest(
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
         present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
-        askall: () => spAskAll(req, body, visitor), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
+        askall: () => spAskAll(req, body, visitor), podcast: () => spPodcast(req, body, visitor), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
         synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor),
         mentions: () => spMentions(req, body, visitor), mentionset: () => spMentionSet(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
