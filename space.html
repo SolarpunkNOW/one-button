@@ -16,6 +16,9 @@
     padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   .wrap{max-width:720px;margin:0 auto;padding:0 16px 64px}
   .pod{border-width:2px}
+  html.podonly .bar,html.podonly #body>*:not(#pod),html.podonly .wrap>*:not(#body):not(#gate),html.podonly body>*:not(.wrap){display:none!important}
+  html.podonly .wrap{padding-top:0}
+  html.podonly #pod{margin:0}
   .pod-ctl{display:flex;align-items:center;justify-content:center;gap:14px}
   .pod-big{font:700 18px "Inter",sans-serif;padding:14px 0;min-height:56px;flex:1;max-width:220px}
   .pod-sk{width:56px;height:56px;padding:0;display:flex;align-items:center;justify-content:center}
@@ -86,6 +89,7 @@
 <script src="/skins/skin.js"></script>
 </head>
 <body>
+<script>if(new URLSearchParams(location.search).get('pod')==='1')document.documentElement.classList.add('podonly');</script>
 <div class="wrap">
   <div class="bar"><span><button class="link" id="back" style="margin-right:12px;font-size:15px">&larr; Back</button><span class="mark">One <b>Button</b></span></span><span class="tag">Shared space</span></div>
   <div class="preview hidden" id="preview">Preview with made-up content. This is what someone sees after tapping the link you shared.</div>
@@ -138,6 +142,8 @@
   </div>
 
   <div id="topicbar"></div>
+  <div id="gather" class="box hidden"></div>
+  <div id="g-pending"></div>
   <div id="mf-wrap" class="hidden">
   <h2>Move forward together</h2>
   <p class="lede">Reads every conversation in this space (never the parts marked private), the projects and the open tasks, and proposes a few merged projects to move forward with, each with first steps. Each of you says yes or not now. A step can be yours, both, or dropped. When everyone says yes, it becomes an agreed project here and its steps become tasks; the ideas it brought together step aside.</p>
@@ -261,12 +267,14 @@ const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 // projects, tasks, passages and seeds that came from them. Its public face is a seed space.
 let SSLIST=null;
 function loadSSList(){if(SSLIST)return Promise.resolve(SSLIST);return post('../ss/list',{}).then(r=>{SSLIST=r.spaces||[];return SSLIST;}).catch(()=>{SSLIST=[];return SSLIST;});}
-function topicOf(D,slug){const sy=(D.synth&&D.synth.topics)||[];const t=sy.find(x=>x.slug===slug);if(t)return t;
+const allTopics=D=>{const sy=(D.synth&&D.synth.topics)||[],own=(D.topics||[]).filter(x=>!sy.some(y=>y.slug===x.slug));return [...sy,...own];};
+function topicOf(D,slug){const sy=allTopics(D);const t=sy.find(x=>x.slug===slug);if(t)return t;
   const ss=(SSLIST||[]).find(x=>x.slug===slug);if(ss)return {slug,name:ss.name,about:ss.about,words:ss.words||[]};
   return {slug,name:slug.replace(/-/g,' ').replace(/^./,c=>c.toUpperCase()),about:'',words:[slug.replace(/-/g,' ')]};}
 function topicView(D,tp){const w=(tp.words||[]).map(x=>String(x).toLowerCase()).filter(Boolean);
   const hit=(...xs)=>{const s=xs.map(x=>Array.isArray(x)?x.join(' '):String(x||'')).join(' ').toLowerCase();return w.some(x=>s.includes(x));};
-  const convs=D.convs.filter(c=>hit(c.title,c.summary,c.points,c.quotes)),ids=new Set(convs.map(c=>c.id));
+  const put=c=>c.topic===tp.slug||((D.convTopics||{})[c.id]||[]).includes(tp.slug);
+  const convs=D.convs.filter(c=>put(c)||(w.length&&hit(c.title,c.summary,c.points,c.quotes))),ids=new Set(convs.map(c=>c.id));
   const projects=D.projects.filter(p=>p.topic===tp.slug||hit(p.name,p.about,p.next)||(p.convs||[]).some(c=>ids.has(c)));
   const pids=new Set(projects.map(p=>p.id));
   return {...D,convs,projects:projects.map(p=>({...p,convs:(p.convs||[]).filter(c=>ids.has(c))})),tasks:D.tasks.filter(x=>ids.has(x.from)||pids.has(x.project)||hit(x.text)),
@@ -284,13 +292,20 @@ const fromTag=id=>id?' . from '+esc(conv(id).title):'';
 const pl=(n,w)=>n+' '+w+(n===1?'':'s');
 $('#lede').textContent=`${pl(D.convs.length,'conversation')}, ${pl(D.projects.length,'project')} growing from ${D.convs.length===1?'it':'them'}.`;
 $('#since').textContent=D.since;
-{const tps=(FULL.synth&&FULL.synth.topics)||[],base=location.pathname+'?s='+encodeURIComponent(SLUG);
+{const tps=allTopics(FULL),base=location.pathname+'?s='+encodeURIComponent(SLUG);
   if(TOPIC){const tp=topicOf(FULL,TOPIC),ss=(SSLIST||[]).find(x=>x.slug===TOPIC);
     $('#topicbar').innerHTML=`<div class="box" style="border-color:var(--ink)"><span class="tag">Subspace</span><h3 style="margin:2px 0">${esc(tp.name)}</h3><div>${esc(tp.about||'')}</div>
       <p class="tag" style="margin:8px 0 0">${D.convs.length} of ${FULL.convs.length} conversations touch it . private to the people in this space</p>
+      ${ACT&&ACT.key&&!D.asMember?`<div class="row"><button id="g-add">Add conversations to this subspace</button></div>`:''}
       <div class="row"><a class="btn" href="${base}">Back to the whole space</a>${ss?`<a class="btn" href="/s/?s=${esc(ss.slug)}" target="_blank" rel="noopener">Its public seed space</a>${ss.parent!==SLUG&&ACT&&ACT.key?`<button id="tp-attach">Make it this subspace's public face</button>`:''}`:(ACT&&ACT.key?`<button id="tp-make">Open a public seed space for it</button>`:'')}</div></div>`;
     const mk=$('#tp-make')||$('#tp-attach');if(mk)mk.onclick=()=>{mk.disabled=true;post('../ss/create',{slug:TOPIC,name:tp.name,about:tp.about||'',words:tp.words||[],parent:SLUG},headers()).then(()=>{SSLIST=null;say('Its public seed space is ready. Everyone in this space is a member.');loadSSList().then(()=>{LAST='';render(FULL);});}).catch(e=>{mk.disabled=false;say(e.message);});};}
-  else $('#topicbar').innerHTML=tps.length?`<div class="row" style="margin-top:4px"><span class="tag">Subspaces</span>${tps.map(x=>`<a class="btn" href="${base}&topic=${encodeURIComponent(x.slug)}">${esc(x.name)}</a>`).join('')}</div>`:'';}
+  else $('#topicbar').innerHTML=(tps.length?`<div class="row" style="margin-top:4px"><span class="tag">Subspaces</span>${tps.map(x=>`<a class="btn" href="${base}&topic=${encodeURIComponent(x.slug)}">${esc(x.name)}</a>`).join('')}</div>`:'')
+    +(ACT&&ACT.key&&!D.asMember?`<div class="row"><button class="link" id="g-new">Make a subspace from conversations</button></div>`:'');
+  // Gathering: pick conversations from any of your spaces into this subspace (or a new one).
+  // From this space they join at once; from another, the people in it are asked first.
+  const gx=$('#g-new')||$('#g-add');if(gx)gx.onclick=()=>gatherOpen(TOPIC||'',FULL);
+  const ps=(FULL.pendingShares||[]).filter(x=>(!TOPIC||x.topic===TOPIC)&&x.status!=='in');
+  $('#g-pending').innerHTML=ACT&&ACT.key&&ps.length?`<div class="box"><span class="tag">Asked for, waiting for a yes</span>${ps.map(x=>`<div style="margin:6px 0"><b>${esc(x.title)}</b> <span class="tag" style="text-transform:none;letter-spacing:0">from ${esc(x.fromName)} . ${x.status==='declined'?'they said not this one':'waiting for '+esc((x.waiting||[]).join(' and '))}</span></div>`).join('')}<p class="tag" style="text-transform:none;letter-spacing:0;margin:6px 0 0">They see the request in their space with you. Once everyone in a conversation says yes, it arrives here.</p></div>`:'';}
 
 // Update choice (preview only: nothing is saved).
 document.querySelectorAll('#how button').forEach(b=>b.onclick=()=>{
@@ -496,7 +511,7 @@ if(HOST&&!window.ASKW){window.ASKW=TOPIC?'all':'here';}
 document.querySelectorAll('[data-aw]').forEach(b=>{b.classList.toggle('on',b.dataset.aw===window.ASKW);b.onclick=()=>{window.ASKW=b.dataset.aw;document.querySelectorAll('[data-aw]').forEach(x=>x.classList.toggle('on',x===b));
   $('#ask-q').placeholder=window.ASKW==='all'?'What have we said about flow funding, anywhere?':'What did we say about pensions?';};});
 if(TOPIC&&!$('#ask-q').value){const tp=topicOf(FULL,TOPIC);$('#ask-q').placeholder='What have we said about '+tp.name+'?';}
-const topicsHere=((FULL.synth&&FULL.synth.topics)||[]);
+const topicsHere=allTopics(FULL);
 const refLabel=(A,k,at)=>{const r=(A.refs||{})[k];if(!r)return '';return r.slug===SLUG?`<button class="link" data-prov="${esc(r.conv)}" data-at="${at}">${esc(r.title)} ${mmss(at)}</button>`:`<span class="tag" style="text-transform:none;letter-spacing:0">${esc(r.space)}: ${esc(r.title)}, ${mmss(at)}</span>`;};
 function showAskAll(A){
   const ans=esc(A.answer).replace(/\[(k\d+)@(\d+(?:\.\d+)?)\]/g,(x,k,at)=>' '+refLabel(A,k,Math.round(+at)));
@@ -571,9 +586,15 @@ $('#mf-wrap').classList.toggle('hidden',!ACT);
 
 // Presentations: made from agreed material, presented here, public with everyone's yes.
 // Bridges out of this space, and what came in from other spaces.
-{const br=D.docs.filter(d=>d.kind==='Bridge'),inn=D.docs.filter(d=>d.kind==='From another conversation');
-  $('#bridges-wrap').classList.toggle('hidden',!br.length&&!inn.length);
-  $('#bridges').innerHTML=br.map(h=>{const cs=Object.entries(h.consent||{}),all=cs.length&&cs.every(([,v])=>v==='ok'),mine=h.consent&&h.consent[ME];
+{const br=D.docs.filter(d=>d.kind==='Bridge'),inn=D.docs.filter(d=>d.kind==='From another conversation'),sh=D.docs.filter(d=>d.kind==='Share');
+  $('#bridges-wrap').classList.toggle('hidden',!br.length&&!inn.length&&!sh.length);
+  // Asked to share one of this space's conversations into a subspace somewhere else.
+  const shHtml=sh.map(h=>{const cs=Object.entries(h.consent||{}),all=cs.length&&cs.every(([,v])=>v==='ok'),mine=h.consent&&h.consent[ME];
+    return `<div class="box" style="border-width:2px"><span class="tag">${all?'shared':'asked'} . ${esc(h.when||'')}</span><h3>${ME==='jay'?'Sharing':'Jay asks to share'} "${esc(h.convTitle)}" with ${esc(h.toName)}</h3>
+      <div>It would go into the subspace "${esc(h.topicName)}", with its recording and transcript. Anything marked private stays private.</div>
+      <div class="row">${cs.map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ')}</div>
+      ${ACT&&mine!==undefined?`<div class="row">${mine!=='ok'?`<button data-hlok="${esc(h.id)}">Yes, share it</button>`:''}${mine!=='no'?`<button class="link" data-hlno="${esc(h.id)}">${all?'Take it back':'Not this one'}</button>`:''}</div>`:''}</div>`;}).join('');
+  $('#bridges').innerHTML=shHtml+br.map(h=>{const cs=Object.entries(h.consent||{}),all=cs.length&&cs.every(([,v])=>v==='ok'),mine=h.consent&&h.consent[ME];
     return `<div class="box"><span class="tag">for ${esc(h.who)} . ${all?'in '+esc(h.who)+"'s space":'waiting for a yes'}${byTag(h)}</span><h3>${esc(h.title)}</h3>
       ${(h.points||[]).map(x=>`<div style="margin:8px 0">${esc(x.text)}${provLine(x)}</div>`).join('')}
       <div class="row">${cs.map(([k,v])=>`<span class="tag">${esc(name(k))}: ${v==='ok'?'yes':v==='no'?'no':'not yet'}</span>`).join(' ')}</div>
@@ -638,7 +659,7 @@ if(sels.length&&ACT&&ACT.key){post('list',{},headers()).then(l=>{const opts=(l.s
     ${HOST&&d.held?`<div class="row"><button data-release="${esc(d.id)}">Share with ${esc(others)}</button></div>`:''}</div>`).join('');
   $('#found').querySelectorAll('[data-release]').forEach(b=>b.onclick=()=>{b.disabled=true;actCall('release',{slug:SLUG,id:b.dataset.release}).then(()=>{say('Shared with the space.');if(REFRESH)REFRESH().then(x=>show(x)).catch(()=>{});}).catch(e=>{b.disabled=false;say(e.message);});});wireProv();}
 $('#distilled').innerHTML=
-  D.docs.filter(d=>!['Highlight','Presentation','Bridge','From another conversation','Finding'].includes(d.kind)).map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
+  D.docs.filter(d=>!['Highlight','Presentation','Bridge','From another conversation','Finding','Share'].includes(d.kind)).map(d=>`<details class="box"><summary>${esc(d.title)}</summary><span class="tag">${esc(d.kind||'Drafted')} ${esc(d.when||'')}${fromTag(d.from)}${byTag(d)}</span>${d.note?`<p class="next">${esc(d.note)}</p>`:''}<div class="tr">${esc(d.body)}</div>${provLine(d)}</details>`).join('')+
   `<details class="box" open><summary>Key points</summary><ul class="pts">${D.convs.flatMap(c=>c.points).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></details>`+
   `<details class="box"><summary>Words worth keeping</summary>${D.convs.flatMap(c=>c.quotes.map(q=>`<div class="quote">${esc(q)}<br><span class="tag">${esc(c.title)}</span></div>`)).join('')}</details>`;
 
@@ -726,7 +747,7 @@ function keep(name,code){KEEP={name,code};try{localStorage.setItem('ob.space.cod
 function forget(){KEEP=null;try{localStorage.removeItem('ob.space.code.'+SLUG);}catch(e){}}
 if(KEEP&&H.get('c'))keep(KEEP.name,KEEP.code);
 function appKey(){try{if(window.OBNative&&OBNative.apiKey)return OBNative.apiKey();}catch(e){}
-  try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
+  try{if(window.parent!==window&&window.parent.obKey)return window.parent.obKey();}catch(e){}try{if(window.top!==window&&window.top.obKey)return window.top.obKey();}catch(e){}try{return JSON.parse(localStorage.getItem('ob-key')||'""');}catch(e){return '';}}
 const post=(route,body,headers={})=>fetch(API+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)})
   .then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))));
 function stripInvite(){try{const tp=new URLSearchParams(location.search).get('topic');history.replaceState(null,'',location.pathname+'?s='+encodeURIComponent(SLUG)+(tp?'&topic='+encodeURIComponent(tp):''));}catch(e){}}
@@ -834,6 +855,41 @@ else if(!SLUG) show({...DEMO,banner:'Preview with made-up content. This is what 
 else if(appKey()){gate('Opening','Loading your view of this space.');post('get',{slug:SLUG},{'x-ob-key':appKey()}).then(D=>{stripInvite();ACT={key:appKey()};show(D,()=>post('get',{slug:SLUG},{'x-ob-key':appKey()}));}).catch(weave);}
 // Anyone with a One Button key opens their spaces with it; the Weave sign-in is for people without the app.
 else weave();
+</script>
+<script>
+/* The conversation picker for a subspace: every conversation in your spaces, searchable, grouped
+ * by space. This space's own join straight away; others are asked of the people in them. */
+function gatherOpen(topic,FULL){
+  const box=document.querySelector('#gather'),key=(typeof ACT!=='undefined'&&ACT&&ACT.key)||'';
+  const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  box.classList.remove('hidden');box.innerHTML='<p class="tag">Loading your conversations…</p>';box.scrollIntoView({behavior:'smooth',block:'start'});
+  const inAlready=new Set((FULL.convs||[]).filter(c=>c.topic===topic||((FULL.convTopics||{})[c.id]||[]).includes(topic)).map(c=>SLUG+'/'+c.id));
+  fetch(API+'allconvs',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':key},body:'{}'}).then(r=>r.json()).then(r=>{
+    const all=(r.convs||[]).filter(c=>!inAlready.has(c.slug+'/'+c.conv)).sort((a,b)=>(b.slug===SLUG)-(a.slug===SLUG));
+    const tp=topic?((FULL.synth&&FULL.synth.topics)||[]).concat(FULL.topics||[]).find(x=>x.slug===topic):null;
+    box.innerHTML=`<span class="tag">${topic?'Add conversations to '+esc(tp?tp.name:topic):'A new subspace from conversations'}</span>
+      ${topic?'':'<input id="g-name" placeholder="Name it, for example Flow funding" aria-label="Name of the subspace" style="width:100%;font:16px Inter,sans-serif;padding:10px;border:1px solid var(--ink);margin:8px 0">'}
+      <input id="g-find" placeholder="Search your conversations" aria-label="Search your conversations" style="width:100%;font:16px Inter,sans-serif;padding:10px;border:1px solid var(--ink);margin:4px 0 8px">
+      <div id="g-list"></div>
+      <div class="row"><button id="g-go">${topic?'Add the chosen ones':'Make the subspace'}</button><button class="link" id="g-x">Cancel</button><span class="tag" id="g-say"></span></div>`;
+    const pick=new Set();
+    const draw=()=>{const q=(document.querySelector('#g-find').value||'').toLowerCase();let last='';
+      document.querySelector('#g-list').innerHTML=all.filter(c=>!q||(c.title+' '+c.summary+' '+c.space+' '+c.people.join(' ')).toLowerCase().includes(q)).slice(0,80).map(c=>{
+        const head=c.slug!==last?`<p class="tag" style="margin:12px 0 2px">${c.slug===SLUG?'From this space':'From your space with '+esc(c.space)+' . they are asked first'}</p>`:'';last=c.slug;
+        const k=c.slug+'/'+c.conv;
+        return head+`<label style="display:flex;gap:10px;align-items:flex-start;margin:8px 0;cursor:pointer"><input type="checkbox" data-gk="${esc(k)}" ${pick.has(k)?'checked':''} style="width:22px;height:22px;flex:none;margin-top:2px"><span><b>${esc(c.title)}</b> <span class="tag" style="text-transform:none;letter-spacing:0">${esc(c.date)}</span><br><span style="font-size:14px;color:var(--muted)">${esc(c.summary)}</span></span></label>`;}).join('')||'<p class="tag">No conversation matches that.</p>';
+      document.querySelectorAll('[data-gk]').forEach(x=>x.onchange=()=>{x.checked?pick.add(x.dataset.gk):pick.delete(x.dataset.gk);});};
+    draw();document.querySelector('#g-find').oninput=draw;
+    document.querySelector('#g-x').onclick=()=>{box.classList.add('hidden');box.innerHTML='';};
+    document.querySelector('#g-go').onclick=()=>{const name=topic?'':(document.querySelector('#g-name').value||'').trim(),say=document.querySelector('#g-say');
+      if(!topic&&!name){say.textContent='Give it a name first.';return;}if(!pick.size){say.textContent='Choose at least one conversation.';return;}
+      const picks=[...pick].map(k=>{const [slug,conv]=k.split('/');return {slug,conv};});
+      document.querySelector('#g-go').disabled=true;say.textContent='Putting it together…';
+      fetch(API+'gather',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':key},body:JSON.stringify({slug:SLUG,topic,name,picks})}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'could not do it');return j;})
+        .then(j=>{const asked=(j.asked||[]);say.textContent=`${j.joined} joined${asked.length?', '+asked.length+' asked for (waiting for '+[...new Set(asked.flatMap(a=>a.waiting))].join(' and ')+')':''}.`;
+          setTimeout(()=>{location.href=location.pathname+'?s='+encodeURIComponent(SLUG)+'&topic='+encodeURIComponent(j.topic);},1200);})
+        .catch(e=>{document.querySelector('#g-go').disabled=false;say.textContent=e.message;});};
+  }).catch(()=>{box.innerHTML='<p class="tag">Could not load your conversations.</p>';});}
 </script>
 <script>
 /* The podcast of a space: a short spoken introduction, then the moments from the recordings one

@@ -1086,7 +1086,8 @@ const addedList = (o) => { const a = o.added || {}; return [...(a.convs || []), 
 function withAdded(s) {
   const d = s.data().data || {}, a = s.data().added || ADDED;
   return { ...d, convs: [...(d.convs || []), ...(a.convs || [])], tasks: [...(d.tasks || []), ...(a.tasks || [])],
-    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])], marks: a.marks || [], synth: a.synth || null, merged: a.merged || {} };
+    projects: [...(d.projects || []), ...(a.projects || [])], docs: [...(d.docs || []), ...(a.docs || [])], marks: a.marks || [], synth: a.synth || null, merged: a.merged || {},
+    topics: a.topics || [], convTopics: a.convTopics || {}, pendingShares: a.pendingShares || [] };
 }
 // Who is acting on a space: a signed-in member (Weave token), or the host through the app key.
 async function actorFor(req, body, slug, visitor) {
@@ -1566,9 +1567,9 @@ async function spPodcast(req, body, visitor) {
   const s = await migrateSpace(slug, await spaceRef(slug).get());
   if (!s.exists) return [404, { error: "no such space" }];
   const d = withAdded(s), people = ((s.data().data || {}).people || []), marks = await marksOf(slug);
-  const tp = topic ? (((d.synth || {}).topics || []).find((x) => x.slug === topic) || { name: topic.replace(/-/g, " "), words: [topic.replace(/-/g, " ")] }) : null;
+  const tp = topic ? ([...((d.synth || {}).topics || []), ...(d.topics || [])].find((x) => x.slug === topic) || { name: topic.replace(/-/g, " "), words: [topic.replace(/-/g, " ")] }) : null;
   const words = tp ? (tp.words || []).map((w) => String(w).toLowerCase()) : [];
-  const fits = (c) => !tp || words.some((w) => [c.title, c.summary, ...(c.points || [])].join(" ").toLowerCase().includes(w));
+  const fits = (c) => !tp || c.topic === topic || ((d.convTopics || {})[c.id] || []).includes(topic) || words.some((w) => [c.title, c.summary, ...(c.points || [])].join(" ").toLowerCase().includes(w));
   const convs = (d.convs || []).filter((c) => !c.held && fits(c));
   const key = "v2|" + convs.map((c) => c.id).join(",") + "|" + marks.filter((m) => m.kind === "private").length;
   const ref = podRef(slug, topic), had = (await ref.get()).data();
@@ -1589,7 +1590,7 @@ async function spPodcast(req, body, visitor) {
   const files = {}, hasAudio = new Set();
   for (const c of convs) {
     if (!c.audio) continue;
-    const f = c.by && c.by !== "jay" ? spaceAudio(slug, c.id) : audioFile(c.iv || c.id);
+    const f = recOf(slug, c);
     const [ok] = await f.exists().catch(() => [false]);
     if (ok) { files[c.id] = f.name; hasAudio.add(c.id); }
   }
@@ -1907,6 +1908,7 @@ async function spBridge(req, body, visitor) {
 }
 // Called after any yes or no on a bridge: carry it over when everyone agrees, take it back otherwise.
 async function bridgeSync(slug, doc) {
+  if (doc && doc.kind === "Share") return shareSync(slug, doc);
   if (!doc || doc.kind !== "Bridge") return;
   const all = Object.values(doc.consent || {}).every((v) => v === "ok");
   const ref = spaceRef(doc.to);
@@ -2355,11 +2357,90 @@ async function themePublish(req, body) {
   if (!SLUG_RE.test(space)) return [400, { error: "bad request" }];
   return spPublish(req, { slug: space, doc, to: body.to === "private" ? "private" : "public" }, "");
 }
+/* ---------- Gathering conversations into a subspace ----------
+ * The host picks conversations from any of their spaces and puts them in a subspace (one the
+ * synthesis found, or a new one named on the spot). A conversation from this same space just joins
+ * it. One from another space is asked for first: a request sits in the space it came from, and only
+ * when everyone in that conversation has said yes is it copied in (words, timings, recording,
+ * private passages still private). A no, or a yes taken back, takes it out again. */
+async function spAllConvs(req) {
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const out = [];
+  for (const snap of (await listRef().collection("spaces").get()).docs) {
+    const s = snap.data(), d = withAdded(snap), people = ((s.data || {}).people || []).map((x) => x.name);
+    for (const c of d.convs || []) if (!c.held && !c.lineage) out.push({ slug: snap.id, space: s.name || snap.id, people, conv: c.id, title: c.title || "Conversation", date: c.date || "", summary: String(c.summary || "").slice(0, 200), audio: !!c.audio });
+  }
+  return [200, { convs: out }];
+}
+async function spGather(req, body) {
+  if (!(await keyOk(req))) return [403, { error: "only from your own One Button" }];
+  const slug = String(body.slug || "");
+  if (!SLUG_RE.test(slug)) return [400, { error: "bad space" }];
+  const snap = await spaceRef(slug).get();
+  if (!snap.exists) return [404, { error: "no such space" }];
+  const target = snap.data(), d0 = withAdded(snap), at = Date.now();
+  let topic = String(body.topic || ""), topicName = "";
+  const known = [...((d0.synth || {}).topics || []), ...(d0.topics || [])];
+  if (!topic) { topicName = String(body.name || "").trim().slice(0, 60); topic = pidOf(topicName).slice(0, 34); if (!topicName || !topic) return [400, { error: "name the subspace" }]; }
+  else topicName = (known.find((x) => x.slug === topic) || {}).name || topic.replace(/-/g, " ");
+  const picks = (Array.isArray(body.picks) ? body.picks : []).map((x) => ({ slug: String(x.slug || ""), conv: String(x.conv || "") })).filter((x) => SLUG_RE.test(x.slug) && /^[\w-]{1,40}$/.test(x.conv)).slice(0, 40);
+  if (!picks.length && !body.name) return [400, { error: "choose at least one conversation" }];
+  const here = picks.filter((x) => x.slug === slug).map((x) => x.conv), asked = [];
+  await admin.firestore().runTransaction(async (tx) => {
+    const x = await tx.get(spaceRef(slug)), a = { ...ADDED, ...(x.data().added || {}) };
+    if (!known.some((k) => k.slug === topic) && !(a.topics || []).some((k) => k.slug === topic)) a.topics = [...(a.topics || []), { slug: topic, name: topicName, about: String(body.about || "").slice(0, 300), words: [], custom: true, at }];
+    const ct = { ...(a.convTopics || {}) }; for (const c of here) ct[c] = [...new Set([...(ct[c] || []), topic])];
+    a.convTopics = ct;
+    tx.set(spaceRef(slug), { added: a, updated: Date.now() }, { merge: true });
+  });
+  for (const pk of picks.filter((x) => x.slug !== slug)) {
+    const src = await spaceRef(pk.slug).get();
+    if (!src.exists) continue;
+    const c = (withAdded(src).convs || []).find((y) => y.id === pk.conv);
+    if (!c || c.held) continue;
+    const people = ((src.data().data || {}).people || []), id = "sh" + (at + asked.length).toString(36);
+    const consent = {}; for (const pp of people) consent[pp.id] = pp.id === "jay" ? "ok" : "pending";
+    const toPeople = ((target.data || {}).people || []).map((x) => x.name).filter((n) => n !== "Jay");
+    const doc = { id, kind: "Share", conv: c.id, convTitle: c.title || "Conversation", convDate: c.date || "", to: slug, toName: toPeople.join(" and ") || target.name || slug, topic, topicName,
+      title: `Share "${c.title || "this conversation"}" with ${toPeople.join(" and ") || "another space"}`, when: new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }), by: "jay", at, consent, visibility: "space", origin: pk.slug };
+    await pushAdded(pk.slug, { docs: [doc] });
+    const waiting = people.filter((pp) => consent[pp.id] !== "ok").map((pp) => pp.name);
+    await pushAdded(slug, { pendingShares: [{ id, from: pk.slug, fromName: src.data().name || pk.slug, conv: c.id, title: c.title || "Conversation", topic, waiting, at }] });
+    asked.push({ title: c.title, waiting });
+    await shareSync(pk.slug, doc);
+  }
+  return [200, { ok: true, topic, name: topicName, joined: here.length, asked }];
+}
+async function shareSync(slug, doc) {
+  const all = Object.values(doc.consent || {}).every((v) => v === "ok"), no = Object.values(doc.consent || {}).some((v) => v === "no");
+  const src = await spaceRef(slug).get(), people = (((src.data() || {}).data || {}).people || []);
+  const c = (withAdded(src).convs || []).find((y) => y.id === doc.conv), cid = "x" + doc.id;
+  let copy = null, heavy = null, privMarks = [];
+  if (all && c) {
+    heavy = await convHeavy(slug, c.id);
+    privMarks = (((src.data().added || {}).marks) || []).filter((m) => m.kind === "private" && m.conv === c.id).map((m) => ({ ...m, id: m.id + "x", conv: cid }));
+    const light = { ...c }; delete light.transcript; delete light.segments;
+    copy = { ...light, id: cid, topic: doc.topic, audioPath: c.audio ? recOf(slug, c).name : "", held: "", by: "jay", at: Date.now(), iv: c.iv || "",
+      lineage: { space: slug, conv: c.id, people: people.map((pp) => pp.name) }, note: "Shared with the agreement of everyone in it." };
+    await convRef(doc.to, cid).set({ id: cid, transcript: String(heavy.transcript || ""), ...(Array.isArray(heavy.segments) && heavy.segments.length ? { segments: heavy.segments } : {}) }, { merge: true });
+    copy.heavy = true;
+  }
+  await admin.firestore().runTransaction(async (tx) => {
+    const x = await tx.get(spaceRef(doc.to));
+    if (!x.exists) return;
+    const a = { ...ADDED, ...(x.data().added || {}) }, has = (a.convs || []).some((y) => y.id === cid);
+    if (copy && !has) { a.convs = [...(a.convs || []), copy]; a.marks = [...(a.marks || []), ...privMarks]; }
+    else if (!all && has) { a.convs = (a.convs || []).filter((y) => y.id !== cid); a.marks = (a.marks || []).filter((m) => m.conv !== cid); }
+    a.pendingShares = (a.pendingShares || []).map((ps) => ps.id === doc.id ? { ...ps, waiting: people.filter((pp) => (doc.consent || {})[pp.id] !== "ok").map((pp) => pp.name), status: all ? "in" : no ? "declined" : "waiting" } : ps);
+    tx.set(spaceRef(doc.to), { added: a, updated: Date.now() }, { merge: true });
+  });
+}
+
 async function hlFind(slug, id) {
   const s = await spaceRef(slug).get();
   if (!s.exists) throw Object.assign(new Error("no such space"), { code: 404 });
   const docs = ((s.data().added || {}).docs || []);
-  const i = docs.findIndex((x) => x.id === id && (x.kind === "Highlight" || x.kind === "Presentation" || x.kind === "Bridge"));
+  const i = docs.findIndex((x) => x.id === id && (x.kind === "Highlight" || x.kind === "Presentation" || x.kind === "Bridge" || x.kind === "Share"));
   if (i < 0) throw Object.assign(new Error("no such highlight"), { code: 404 });
   return { s, docs, i };
 }
@@ -2422,9 +2503,10 @@ async function spTranscript(req, body, visitor) {
   const h = await convHeavy(slug, c.id);
   return [200, { id: c.id, transcript: h.transcript || "", segments: h.segments || [] }];
 }
+const recOf = (slug, c) => c.audioPath ? admin.storage().bucket().file(c.audioPath) : c.by && c.by !== "jay" ? spaceAudio(slug, c.id) : audioFile(c.iv || c.id);
 async function spAudio(req, res, visitor) {
   const { slug, c } = await spConvFor(req, {}, visitor);
-  const f = c.by && c.by !== "jay" ? spaceAudio(slug, c.id) : audioFile(c.iv || c.id);
+  const f = recOf(slug, c);
   const [ok] = await f.exists().catch(() => [false]);
   if (!ok) { res.status(404).json({ error: "the recording is no longer on the server" }); return; }
   const [meta] = await f.getMetadata().catch(() => [{}]);
@@ -2471,6 +2553,7 @@ async function spServe(slug, s) {
         live.push({ who: "jay", text: String(t.text || ""), done: !!t.done, from: "", due: String(t.due || ""), held: "", project: want.get(t.project), live: true });
     }
   } catch {}
+  delete d.pendingShares;
   return [200, { ...d, banner: "", docs: (d.docs || []).filter(shown), convs: (d.convs || []).filter(keep), tasks: [...(d.tasks || []).filter(shown), ...live], projects, marks: (d.marks || []).filter((m) => !hidden.has(m.conv)) }];
 }
 
@@ -2607,7 +2690,7 @@ exports.oneButton = onRequest(
       try { send(await searchAll(req, body, visitor)); } catch (e) { res.status((e && e.code) || 500).json({ error: String((e && e.message) || e) }); }
       return;
     }
-    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "podcast", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
+    if (sp && ["record", "add", "highlight", "consent", "publish", "transcript", "audio", "export", "search", "harvest", "projseed", "seeds", "seedok", "seedto", "seeddrop", "mark", "markset", "clip", "bite", "bitepub", "present", "ask", "podcast", "allconvs", "gather", "askall", "asked", "place", "release", "synth", "synthset", "bridge", "mentions", "mentionset"].includes(sp[1])) {
       // A member puts something in, or takes something out: their Weave sign-in (or the host's
       // key) is the lock.
       const visitor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "";
@@ -2619,7 +2702,7 @@ exports.oneButton = onRequest(
         seedok: () => spSeedOk(req, body, visitor), seedto: () => spSeedTo(req, body, visitor), seeddrop: () => spSeedDrop(req, body, visitor),
         mark: () => spMark(req, body, visitor), markset: () => spMarkSet(req, body, visitor), clip: () => spClip(req, visitor), bitepub: () => spBitePublish(req, body, visitor),
         present: () => spPresent(req, body, visitor), ask: () => spAsk(req, body, visitor),
-        askall: () => spAskAll(req, body, visitor), podcast: () => spPodcast(req, body, visitor), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
+        askall: () => spAskAll(req, body, visitor), podcast: () => spPodcast(req, body, visitor), allconvs: () => spAllConvs(req), gather: () => spGather(req, body), asked: () => spAskAllList(), place: () => spPlace(req, body, visitor), release: () => spRelease(req, body, visitor),
         synth: () => spSynth(req, body, visitor), synthset: () => spSynthSet(req, body, visitor), bridge: () => spBridge(req, body, visitor),
         mentions: () => spMentions(req, body, visitor), mentionset: () => spMentionSet(req, body, visitor) }[sp[1]];
       try { send(await fn()); }
