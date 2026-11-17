@@ -1522,10 +1522,9 @@ const keyOk = async (req) => { const p = await whoIs(req); return !!(p && p.name
  * voice (Kokoro's George) when fal answers; otherwise the page has the phone read them. */
 const PODCAST_SYS = (names, topic) => `You make a short audio episode from conversations between ${names}${topic ? `, about ${topic}` : ""}, for the people in them to listen back. Lines start with a marker like [c2@431] (conversation c2, second 431). Only conversations marked "has recording" can be played. Reply with JSON only:
 {"title": "at most 8 words",
- "intro": "the spoken synopsis, 90 to 150 words, warm and plain: what the conversations covered, what is taking shape, where it is heading",
- "clips": [{"ref": "c2@431", "until": 470, "lead": "one spoken sentence introducing this moment: who is talking and about what", "about": "3 to 6 words"}],
- "outro": "spoken, 40 to 80 words: what is still open and what could happen next"}
-4 to 7 clips, each 20 to 60 seconds, the most alive moments where an idea lands or turns, spread across the conversations, in an order that tells the story. "until" is the second the clip ends, at a natural pause. Never anything negative or reflective about any person's personality, character or state of mind. Written to be heard: short sentences, no lists, no markers in the spoken text, no em dashes.`;
+ "intro": "spoken, 50 to 90 words, warm and plain: sets the scene for what you are about to hear, then hands over to the recordings",
+ "clips": [{"ref": "c2@431", "until": 520, "about": "3 to 6 words naming what this moment is about"}]}
+After the intro the episode is only the recordings: no narration between them, so choose moments that explain themselves. 5 to 8 clips, each 40 to 90 seconds, starting where a speaker begins a thought and ending after they finish it, never mid-sentence. Pick the moments where an idea is laid out, lands or turns, spread across the conversations, in an order that tells the story. Never anything negative or reflective about any person's personality, character or state of mind. Written to be heard: short sentences, no markers in the spoken text, no em dashes.`;
 const podRef = (slug, topic) => listRef().collection("podcasts").doc(slug + "__" + (topic || "all"));
 const podFile = (slug, id, n) => admin.storage().bucket().file(`onebutton/podcasts/${slug}/${id}/${n}.wav`);
 // A signed address for one stored audio file: the path and an expiry, sealed with the app's key.
@@ -1571,7 +1570,7 @@ async function spPodcast(req, body, visitor) {
   const words = tp ? (tp.words || []).map((w) => String(w).toLowerCase()) : [];
   const fits = (c) => !tp || words.some((w) => [c.title, c.summary, ...(c.points || [])].join(" ").toLowerCase().includes(w));
   const convs = (d.convs || []).filter((c) => !c.held && fits(c));
-  const key = convs.map((c) => c.id).join(",") + "|" + marks.filter((m) => m.kind === "private").length;
+  const key = "v2|" + convs.map((c) => c.id).join(",") + "|" + marks.filter((m) => m.kind === "private").length;
   const ref = podRef(slug, topic), had = (await ref.get()).data();
   // Signed addresses are made fresh each time; the episode itself is kept until the conversations change.
   const withLinks = (ep) => ({ ...ep, audio: Object.fromEntries(Object.entries(ep.files || {}).map(([cid, path]) => [cid, STREAM_BASE + seal(path)])),
@@ -1609,20 +1608,48 @@ async function spPodcast(req, body, visitor) {
   try { ep = parseJSON(JSON.parse(out.text).choices[0].message.content); } catch {}
   if (!ep || !ep.intro) return [502, { error: "the episode did not come together this time; try again" }];
   const priv = (cid) => marks.filter((m) => m.kind === "private" && m.conv === cid).map((m) => [m.from, m.to]);
+  // Clip edges sit on transcript line boundaries and on whole sentences: back to where the thought
+  // starts (up to 25 seconds), on to where it ends (up to 30 seconds past what was asked), with a
+  // short breath either side, so no word is cut.
+  const ends = (x) => /[.!?]["')\]]?\s*$/.test(String(x || ""));
+  // A boundary before line k: the line before it finished a sentence, or a pause follows it
+  // (the next line starts later than its words take to say, at about 2.8 words a second).
+  const edge = (segs, k) => k <= 0 || k >= segs.length || ends(segs[k - 1][1]) || segs[k][0] - segs[k - 1][0] - String(segs[k - 1][1]).split(/\s+/).length / 2.8 > 0.7;
   const clips = (Array.isArray(ep.clips) ? ep.clips : []).map((x) => {
     const m = String(x && x.ref || "").replace(/[\[\]]/g, "").match(/^([\w-]+)@(\d+(?:\.\d+)?)$/);
     if (!m || !hasAudio.has(m[1])) return null;
     const segs = segsOf[m[1]] || []; let at = +m[2];
-    const snap = segs.filter(([a]) => a <= at + 0.5).pop(); if (snap) at = snap[0];
-    let until = Number(x.until) || at + 40; if (until < at + 15) until = at + 40; if (until > at + 75) until = at + 75;
+    let i = segs.length ? Math.max(0, segs.findIndex(([a]) => a > at + 0.5) - 1) : -1;
+    if (i < 0 && segs.length) i = segs.length - 1;
+    // Back to the nearest full stop within 40 seconds; failing that, the nearest pause.
+    if (i >= 0) { const first = i; let k = i, hit = -1, pause = -1;
+      while (k >= 0 && segs[first][0] - segs[k][0] <= 40) { if (k === 0 || ends(segs[k - 1][1])) { hit = k; break; } if (pause < 0 && edge(segs, k)) pause = k; k--; }
+      i = hit >= 0 ? hit : pause >= 0 ? pause : first; at = segs[i][0]; }
+    let want = Math.max(Number(x.until) || at + 60, at + 30); if (want > at + 100) want = at + 100;
+    let until = want;
+    if (segs.length) {
+      let j = segs.findIndex(([a]) => a >= want);
+      if (j < 0) until = Number.POSITIVE_INFINITY;
+      // On to the next full stop within 45 seconds; failing that, the first pause.
+      else { let k = j, hit = -1, pause = -1;
+        while (k <= segs.length && (k === segs.length || segs[k][0] - want <= 45)) { if (k === segs.length || ends(segs[k - 1][1])) { hit = k; break; } if (pause < 0 && edge(segs, k)) pause = k; k++; }
+        j = hit >= 0 ? hit : pause >= 0 ? pause : j; until = j < segs.length ? segs[j][0] : Number.POSITIVE_INFINITY; }
+    }
+    at = Math.max(0, at - 0.6);
+    if (Number.isFinite(until)) until += 0.4; else until = 1e7;
     if (priv(m[1]).some(([a, b]) => at < b && until > a)) return null;
     const c = convs.find((y) => y.id === m[1]);
-    return { conv: m[1], title: c.title, at: Math.round(at), until: Math.round(until), lead: String(x.lead || "").slice(0, 300), about: String(x.about || "").slice(0, 80) };
-  }).filter(Boolean).slice(0, 7);
+    return { conv: m[1], title: c.title, at: Math.round(at * 10) / 10, until: Math.round(until * 10) / 10, about: String(x.about || "").slice(0, 80) };
+  }).filter(Boolean).reduce((out, c) => {
+    // Moments from one conversation that overlap or nearly touch become one longer moment.
+    const prev = out.find((y) => y.conv === c.conv && c.at < y.until + 8 && c.until > y.at - 8);
+    if (prev) { prev.at = Math.min(prev.at, c.at); prev.until = Math.max(prev.until, c.until); if (c.about && !prev.about.includes(c.about)) prev.about = prev.about + "; " + c.about; }
+    else out.push(c);
+    return out;
+  }, []).slice(0, 8);
   const id = "e" + Date.now().toString(36);
-  const parts = [{ kind: "say", text: String(ep.intro).slice(0, 1500), label: "Synopsis" }];
-  for (const c of clips) { if (c.lead) parts.push({ kind: "say", text: c.lead, label: c.about || c.title }); parts.push({ kind: "clip", ...c, label: c.about || c.title, private: priv(c.conv) }); }
-  if (ep.outro) parts.push({ kind: "say", text: String(ep.outro).slice(0, 800), label: "Where it is heading" });
+  const parts = [{ kind: "say", text: String(ep.intro).slice(0, 1000), label: "Introduction" }];
+  for (const c of clips) parts.push({ kind: "clip", ...c, label: c.about || c.title, private: priv(c.conv) });
   // The spoken parts, in George's voice when fal answers; the first refusal stops the rest.
   let voiced = true, why = "";
   await Promise.all(parts.map(async (x, n) => {
