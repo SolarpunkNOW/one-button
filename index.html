@@ -103,6 +103,11 @@
   .al-row .tbtn{min-height:44px}
   .sheet{position:fixed;inset:0;z-index:5;background:var(--cream);color:var(--ink);transform:translateY(100%);transition:transform .32s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   .sheet.open{transform:translateY(0)}
+  .an-card{border-bottom:1px solid var(--line);padding:14px 0}
+  .an-card.new{border-left:3px solid var(--spark);padding-left:12px}
+  .an-q{font-weight:700;margin:4px 0 6px;overflow-wrap:anywhere}
+  .an-a{white-space:pre-wrap;line-height:1.55;overflow-wrap:anywhere;cursor:pointer}
+  .an-a.fold{display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
   .p1-task{border-bottom:1px solid var(--line,#E5E5E5);padding:10px 0}
   .p1-task.new{border-left:3px solid var(--spark);padding-left:10px;background:var(--cream-2)}
   .sheet-bar{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line)}
@@ -432,7 +437,7 @@
     <button class="save" id="set-save">Save</button>
     <p class="note">Off: the lock screen shows only how many tasks are open. Words to listen for, separated by commas, get spelled right when you speak them. Names of your people, places and projects are listened for already.</p>
     <div style="height:26px"></div>
-    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-features">What's new and what it can do</button><button class="tbtn" id="link-device">Link another device</button></div>
+    <div class="iv-row" style="margin-bottom:18px"><button class="tbtn" id="open-photos">Photos and accounts</button><button class="tbtn" id="open-answers">Claude's answers</button><button class="tbtn" id="open-features">What's new and what it can do</button><button class="tbtn" id="link-device">Link another device</button></div>
     <p class="note hidden" id="link-note"></p>
     <button class="lk-upd hidden" id="set-upd" hidden style="margin:0 0 18px"></button>
     <label class="set-h">My places</label>
@@ -2534,16 +2539,29 @@ function ivAuto(){
 let SEEN=LS.get('ob-asks-seen',[]);
 // One answer, in full: the question, every word of the answer, the tasks it left waiting, and
 // Share / Got it. Opened from the yellow bar, the Claude card, or the lock screen.
-function openAnswer(id){const a=ASKS.find(x=>x.id===id);if(!a)return;
+// All of Claude's answers on one page: the new ones first, each in full (long ones fold at a few
+// lines, tap to open), then the last few already read. Opening the page counts as reading them,
+// so the yellow bar notice goes in one go.
+function openAnswers(focus){
   if(lock.classList.contains('on'))hideLock();
-  openSheet('#sheet-answer');$('#an-title').textContent='Claude answered';
-  $('#an-body').innerHTML=`<p class="nmeta" style="margin:0 0 10px">You asked: ${escapeHtml(askWords(a))}</p>
-    <div style="white-space:pre-wrap;font-size:16px;line-height:1.6;overflow-wrap:anywhere">${escapeHtml(a.answer||'(no answer text)')}</div>
-    ${a.tasks?`<p class="note" style="margin-top:14px">${a.tasks} task${a.tasks>1?'s':''} from this answer are waiting in Triage for a place.</p>`:''}
-    <div class="iv-row" style="margin-top:16px"><button class="save" id="an-ok">Got it</button><button class="tbtn" id="an-share">Share</button>${a.interview?'<button class="tbtn" id="an-conv">Open the conversation</button>':''}</div>`;
-  $('#an-ok').onclick=()=>{seeAsks([a.id]);CL_OPEN=false;closeSheets();renderClaude();};
-  $('#an-share').onclick=()=>ivShareText((askWords(a)?'Q: '+askWords(a)+'\n\n':'')+(a.answer||''));
-  const cv=$('#an-conv');if(cv)cv.onclick=()=>{closeSheets();openIv(a.interview+'.m4a',false);};}
+  const done=ASKS.filter(a=>a.kind!=='app'&&a.status==='done').sort((x,y)=>(y.answered||y.updated||y.created||0)-(x.answered||x.updated||x.created||0));
+  const fresh=done.filter(a=>!SEEN.includes(a.id)),old=done.filter(a=>SEEN.includes(a.id)).slice(0,15);
+  openSheet('#sheet-answer');$('#an-title').textContent="Claude's answers";
+  const when=a=>{const ts=a.answered||a.updated||a.created;return ts?new Date(ts).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';};
+  const card=(a,isNew)=>`<div class="an-card${isNew?' new':''}" id="an-${a.id}"><div class="nmeta">${isNew?'New . ':''}${escapeHtml(when(a))}</div>
+    <div class="an-q">${escapeHtml(askWords(a))}</div>
+    <div class="an-a${String(a.answer||'').length>420?' fold':''}" data-anfold>${escapeHtml(a.answer||'(no answer text)')}</div>
+    ${a.tasks?`<div class="nmeta">${a.tasks} task${a.tasks>1?'s':''} from this are waiting in Triage</div>`:''}
+    <div class="iv-row" style="margin-top:6px"><button class="tbtn" data-anshare="${a.id}">Share</button>${a.interview?`<button class="tbtn" data-anconv="${a.id}">Open the conversation</button>`:''}</div></div>`;
+  $('#an-body').innerHTML=(fresh.length?fresh.map(a=>card(a,true)).join(''):'<p class="note">Nothing new from Claude.</p>')
+    +(old.length?`<details style="margin-top:18px"><summary class="iv-h" style="cursor:pointer">Read before (${old.length})</summary>${old.map(a=>card(a,false)).join('')}</details>`:'');
+  const b=$('#an-body');
+  b.querySelectorAll('[data-anfold]').forEach(x=>x.onclick=()=>x.classList.toggle('fold'));
+  b.querySelectorAll('[data-anshare]').forEach(x=>x.onclick=()=>{const a=done.find(y=>y.id===x.dataset.anshare);ivShareText((askWords(a)?'Q: '+askWords(a)+'\n\n':'')+(a.answer||''));});
+  b.querySelectorAll('[data-anconv]').forEach(x=>x.onclick=()=>{const a=done.find(y=>y.id===x.dataset.anconv);closeSheets();openIv(a.interview+'.m4a',false);});
+  if(focus){const el=$('#an-'+focus);if(el){const d=el.closest('details');if(d)d.open=true;el.scrollIntoView({block:'start'});}}
+  if(fresh.length)seeAsks(fresh.map(a=>a.id));CL_OPEN=false;}
+function openAnswer(id){openAnswers(id);}
 function seeAsks(ids){SEEN=[...new Set([...SEEN,...ids])].slice(-200);LS.set('ob-asks-seen',SEEN);renderClaude();}
 let CL_OPEN=false; // the answer card shows once the bar notice is tapped
 function renderClaude(){
@@ -2551,8 +2569,9 @@ function renderClaude(){
   const box=$('#claude-strip'); if(!box)return;
   const pend=ASKS.filter(a=>a.status!=='done'&&a.kind!=='app'), fresh=ASKS.filter(a=>a.status==='done'&&a.kind!=='app'&&!SEEN.includes(a.id));
   const a=fresh[0]||pend[0]; if(!a){box.innerHTML='';if(NOTICE&&NOTICE.claude){NOTICE=null;renderBar();}return;}
-  if(fresh.length&&!CL_OPEN){const w=askWords(fresh[0]);NOTICE={text:'Claude answered'+(fresh.length>1?' ('+fresh.length+')':'')+': '+(w.length>60?w.slice(0,59)+'…':w),until:0,claude:true,
-      go:()=>openAnswer(fresh[0].id)};renderBar();box.innerHTML='';return;}
+  if(fresh.length&&!CL_OPEN){const w=askWords(fresh[0]);
+    NOTICE={text:fresh.length>1?'Claude answered '+fresh.length+' questions. Tap to read them all.':'Claude answered: '+(w.length>60?w.slice(0,59)+'…':w),until:0,claude:true,go:()=>openAnswers()};
+    renderBar();box.innerHTML='';return;}
   const n=fresh.length?fresh.length:pend.length, done=a.status==='done';
   const tag=done?`Claude answered${n>1?' . '+n+' new':''}`:`Claude is working${n>1?' on '+n:''}`;
   const body=done?`<div class="cl-ans">${escapeHtml(a.answer||'')}</div>${a.tasks?`<div class="iv-tag">${a.tasks} task${a.tasks>1?'s':''} waiting for you to place</div>`:''}`
@@ -2560,7 +2579,7 @@ function renderClaude(){
   box.innerHTML=`<div class="cl-strip" role="button" tabindex="0"><span class="cl-dot${done?' done':''}"></span><div class="cl-text"><div class="iv-tag">${tag}</div>${body}</div>${done?'<button class="cl-x" aria-label="Dismiss">&times;</button>':''}</div>`;
   const strip=box.firstChild;
   strip.onclick=e=>{if(e.target.closest('.cl-x')){CL_OPEN=false;seeAsks([a.id]);return;}
-    if(done){openAnswer(a.id);return;}
+    if(done){openAnswers();return;}
     if(a.interview){openIv(a.interview+'.m4a',false);}
     if(done)seeAsks([a.id]);};
 }
@@ -2885,6 +2904,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdat
 
 function boot(){
   checkUpdate();
+  $('#open-answers').onclick=()=>openAnswers();
   $('#open-features').onclick=()=>{openSheet('#sheet-space');$('#sp-title').textContent="What's new and what it can do";spFrame('/features.html#new');};
   // Link the laptop or another phone: one link, used once, no key typed anywhere.
   $('#link-device').onclick=async()=>{const b=$('#link-device'),n=$('#link-note');b.disabled=true;n.classList.remove('hidden');n.textContent='Making the link…';
