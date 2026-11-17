@@ -904,7 +904,8 @@ async function spList() {
   // tasks both people generated, seen from the member's side.
   const withMe = (await spacesForMe()).map(({ host, snap }) => { const s = snap.data(), d = withAdded(snap);
     return { slug: s.slug, person: host, name: host[0].toUpperCase() + host.slice(1), host, updated: s.updated, joined: true,
-      convs: (d.convs || []).filter((c) => !c.held).length, tasks: (d.tasks || []).filter((t) => !t.held).length }; });
+      convs: (d.convs || []).filter((c) => !c.held).length, tasks: (d.tasks || []).filter((t) => !t.held).length,
+      list: (d.convs || []).filter((c) => !c.held).map((c) => ({ id: c.id, title: c.title || "Conversation", date: c.date || "", audio: !!c.audio })).slice(-60) }; });
   return { spaces: mine, withMe };
 }
 

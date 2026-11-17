@@ -2242,10 +2242,14 @@ function renderInterviews(){
     // iPhone and browsers: the conversations on the server, newest first, each opening its card.
     $('#iv-webrec').style.display='';
     const list=Object.values(IVS).filter(s=>s&&s.id&&!String(s.id).startsWith('import-')&&s.status!=='task').sort((a,b)=>(b.created||0)-(a.created||0));
-    box.innerHTML=list.length?'':'<div class="empty" style="padding:14px 0">No conversations yet. Tap Record a conversation, or talk to the big button for over a minute.</div>';
+    // Conversations someone shared with you live in your space with them: listed here, each opening that space.
+    const shared=(WITH_ME||[]).filter(sp=>(sp.list||[]).length);
+    let sh='';for(const sp of shared)sh+=`<div class="iv-h" style="margin-top:6px">Shared with you by ${escapeHtml(sp.name)}</div>`+sp.list.slice().reverse().map(c=>`<div class="note-item"><div class="ntext" data-shsp="${escapeHtml(sp.slug)}">${escapeHtml(c.title)}<div class="nmeta">${escapeHtml(c.date)}${c.audio?' . recording':''}</div></div></div>`).join('');
+    box.innerHTML=sh+(shared.length&&list.length?'<div class="iv-h" style="margin-top:14px">Your own</div>':'')+(list.length||shared.length?'':'<div class="empty" style="padding:14px 0">No conversations yet. Tap Record a conversation, or talk to the big button for over a minute.</div>');
     for(const s of list){const row=document.createElement('div');row.className='note-item';
       row.innerHTML=`<div class="ntext">${escapeHtml(s.title||'Conversation')}<div class="nmeta">${ivWhen(s.created||Date.now())}${(s.people||[]).length?' . with '+escapeHtml(s.people.join(', ')):''}${s.status==='working'?' . writing it up':s.status==='error'?' . could not be written up':''}</div></div>`;
       row.querySelector('.ntext').onclick=()=>openIv(s.id+'.m4a',true);box.appendChild(row);}
+    box.querySelectorAll('[data-shsp]').forEach(x=>x.onclick=()=>{const sp=WITH_ME.find(y=>y.slug===x.dataset.shsp);if(sp)spOpen(sp);});
     return;}
   const list=ivFiles();
   if(!list.length){box.innerHTML='<div class="empty" style="padding:14px 0">No interviews yet. Tap the record button three times on the lock screen to start one.</div>';return;}
@@ -2933,7 +2937,20 @@ function boot(){
       if(navigator.share)navigator.share({title:'Link my One Button',text:d.link}).catch(()=>{});}
     catch(e){n.textContent='Could not make the link: '+e.message;}b.disabled=false;};
   // A person's link carries their key once; it is kept on this phone and dropped from the address.
-  {const k=new URLSearchParams(location.search).get('key');if(k&&/^[\w-]{16,80}$/.test(k)){LS.set('ob-key',k);history.replaceState(null,'',location.pathname);}}
+  // On an iPhone in Safari the key stays in the address: "Add to Home Screen" copies the address, and
+  // the home-screen app keeps its own storage, so that is how the key reaches it. Everywhere else
+  // (and once inside the home-screen app) it is dropped from the address.
+  {const k=new URLSearchParams(location.search).get('key');if(k&&/^[\w-]{16,80}$/.test(k)){LS.set('ob-key',k);
+    // The key arrives after the buttons were set up: show what a signed-in person sees straight away.
+    $('#open-ivs').style.display='';try{ivRefresh();spRefresh();}catch(e){}
+    const ios=/iP(hone|ad|od)/.test(navigator.userAgent),standalone=navigator.standalone||matchMedia('(display-mode: standalone)').matches;
+    if(!(ios&&!standalone))history.replaceState(null,'',location.pathname);}}
+  // No key at all (a home-screen app added before the key was there): say so plainly, with a box
+  // for the link, instead of a page that looks empty.
+  if(!obKey()&&!(window.OBNative&&OBNative.apiKey)){const c=document.createElement('div');c.className='lk-ready';c.id='signin-card';c.style.cssText='margin:12px 16px;padding:14px;border:2px solid var(--ink);background:var(--paper,#fff)';
+    c.innerHTML=`<div style="font-weight:700;margin-bottom:4px">Sign in to see what Jay shared with you</div><div class="nmeta" style="margin-bottom:8px">Paste the One Button link Jay sent you. On an iPhone, the app on your home screen and Safari keep separate sign-ins, so this is needed once in each.</div><div class="iv-row"><input class="nd-when" id="signin-link" placeholder="Paste your link" aria-label="Your One Button link" style="flex:1"><button class="save" id="signin-go">Sign in</button></div>`;
+    document.body.insertBefore(c,document.body.firstChild);
+    $('#signin-go').onclick=()=>{const v=$('#signin-link').value.trim(),m=v.match(/[?&]key=([\w-]{16,80})/)||v.match(/^([\w-]{16,80})$/);if(!m){showToast('That does not look like your link');return;}LS.set('ob-key',m[1]);location.reload();};}
   // A single-use link from Jay's own app: this device gets a key of its own and the link is spent.
   {const c=new URLSearchParams(location.search).get('claim');if(c&&/^[\w-]{24}$/.test(c)){history.replaceState(null,'',location.pathname);
     fetch(API+'/api/person/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claim:c})}).then(r=>r.json().then(d=>r.ok?d:Promise.reject(new Error(d.error||r.status))))
