@@ -48,6 +48,7 @@
     <div class="ask"><input id="q" placeholder="Key ideas around…" aria-label="What to listen to"><button id="q-go">Listen</button></div>
     <div id="recent"></div>
   </div>
+  <div id="home" class="note" style="margin:-6px 0 14px"></div>
   <div id="player" hidden>
     <div class="ctl">
       <button class="sk" id="prev" aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z" fill="currentColor"/></svg></button>
@@ -152,7 +153,18 @@
       fr.readAsDataURL(blob);};
     mr.start();msg('Speak, then press Done.');};
   // ---- getting a session ----
-  function show(e){EP=e;$('#start').hidden=true;$('#player').hidden=false;$('#title').textContent=e.title;$('#top').textContent='Listening . '+e.ideas.length+' key ideas';
+  // Where this theme lives: the subspace it was drawn from, or the one just made for it, with
+  // conversations from other spaces offered to it (their people are asked before they arrive).
+  function drawHome(e){const h=e.home,box=$('#home');if(!h){box.innerHTML='';return;}
+    box.innerHTML=`${h.created?'A new subspace for this theme, ':'From your subspace '}<b>${esc(h.name)}</b> in your space with ${esc(h.space)}.${e.reused?' Nothing new since last time, so this is the same session.':''}
+      <div style="margin-top:6px"><button class="link" id="h-open">Open the subspace</button>${(h.others||[]).length?` . <button class="link" id="h-ask">Ask to add ${h.others.length} conversation${h.others.length>1?'s':''} from other spaces</button>`:''} . <button class="link" id="h-fresh">Make a fresh session</button></div><div id="h-say"></div>`;
+    $('#h-open').onclick=()=>{location.href='/space.html?s='+encodeURIComponent(h.slug)+'&topic='+encodeURIComponent(h.topic);};
+    $('#h-fresh').onclick=()=>{stopAll();if(NP)try{OBNative.podCmd('stop',0);}catch(x){}post('listen',{q:e.q,fresh:true}).then(show).catch(x=>msg(x.message));msg('Making a fresh session…');};
+    const ask=$('#h-ask');if(ask)ask.onclick=()=>{ask.disabled=true;
+      fetch('/api/space/gather',{method:'POST',headers:{'Content-Type':'application/json','x-ob-key':K},body:JSON.stringify({slug:h.slug,topic:h.topic,picks:h.others.map(o=>({slug:o.slug,conv:o.conv}))})}).then(r=>r.json())
+        .then(r=>{const w=[...new Set((r.asked||[]).flatMap(a=>a.waiting))];$('#h-say').textContent=r.error||('Asked. '+(w.length?'Waiting for '+w.join(' and ')+' to say yes; each sees the request in their space with you.':'They joined.'));})
+        .catch(()=>{ask.disabled=false;$('#h-say').textContent='Could not ask just now.';});};}
+  function show(e){EP=e;drawHome(e);$('#start').hidden=true;$('#player').hidden=false;$('#title').textContent=e.title;$('#top').textContent='Listening . '+e.ideas.length+' key ideas';
     $('#ideas').innerHTML=e.ideas.map((d,k)=>`<li><button data-k="${k}"><span class="n">${k+1}</span>${esc(d.name)}<span class="ln">${esc(d.line)}</span></button></li>`).join('');
     document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>jumpIdea(+b.dataset.k));
     try{history.replaceState(null,'',location.pathname+'?id='+encodeURIComponent(e.id));}catch(x){}

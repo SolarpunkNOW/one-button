@@ -1701,14 +1701,46 @@ async function spListen(req, body) {
   if (!q) return [400, { error: "say what to listen to" }];
   const docs = (await listRef().collection("spaces").get()).docs;
   const hint = [...new Set(docs.flatMap((s) => [...((((s.data().added || {}).synth || {}).topics) || []), ...(((s.data().added || {}).topics) || [])].map((x) => x.name)))].slice(0, 30).join(", ");
+  // A theme already explored: the subspace whose name (or marker words) holds every word of it.
+  const qw = WORDS(q).filter((w) => !ASK_STOP.has(w) && !["key", "ideas", "idea", "around", "main", "core"].includes(w));
+  // Several spaces can carry the same theme: the one with most conversations in it wins, and one
+  // made by hand or given a public seed space counts double.
+  let home = null;
+  const inTopic = (d, c, tp, words) => c.topic === tp || ((d.convTopics || {})[c.id] || []).includes(tp) || words.some((w) => [c.title, c.summary, ...(c.points || [])].join(" ").toLowerCase().includes(w));
+  if (qw.length) {
+    const seeds = new Set((await ssCol().get()).docs.map((x) => x.data()).filter((x) => x.parent).map((x) => x.parent + "/" + x.slug));
+    const cands = [];
+    for (const snap of docs) {
+      const a = snap.data().added || {}, d = withAdded(snap), tps = [...(((a.synth || {}).topics) || []), ...(a.topics || [])];
+      for (const tp of tps) {
+        const hay = (tp.name + " " + (tp.words || []).join(" ") + " " + tp.slug.replace(/-/g, " ")).toLowerCase();
+        if (!qw.every((w) => hay.includes(w.replace(/s$/, "")))) continue;
+        const words = (tp.words || []).map((w) => String(w).toLowerCase());
+        const convs = (d.convs || []).filter((c) => !c.held && inTopic(d, c, tp.slug, words));
+        const score = convs.length * ((tp.custom || seeds.has(snap.id + "/" + tp.slug)) ? 2 : 1);
+        cands.push({ score, slug: snap.id, topic: tp.slug, name: tp.name, space: snap.data().name || snap.id, words, existing: true,
+          key: convs.map((c) => c.id).sort().join(",") + "|" + ((d.marks || []).filter((m) => m.kind === "private").length) });
+      }
+    }
+    cands.sort((x, y) => y.score - x.score);
+    if (cands.length && cands[0].score > 0) home = cands[0];
+  }
+  // Already listened to and nothing new in that subspace since: the same session, at once.
+  if (home && !body.fresh) {
+    const prev = (await listenCol().orderBy("at", "desc").limit(30).get()).docs.map((x) => x.data()).find((x) => x.home && x.home.slug === home.slug && x.home.topic === home.topic && x.homeKey === home.key);
+    if (prev) return [200, withSrc({ ...prev, reused: true })];
+  }
   const terms = await widen(q, hint);
   const hits = (text) => { const s = String(text || "").toLowerCase(), ws = new Set(WORDS(s)); let n = 0; for (const x of terms) if (x.includes(" ") || x.length > 5 ? s.includes(x) : ws.has(x)) n++; return n; };
   const blocks = [], refs = {}, segsOf = {};
   let k = 0;
+  let onlyAll = false;
+  for (let pass = 0; pass < 2; pass++) {
   for (const snap of docs) {
     const slug = snap.id, s = await migrateSpace(slug, snap), d = withAdded(s), marks = (d.marks || []).filter((m) => m.kind === "private");
     for (const c of d.convs || []) {
       if (c.held) continue;
+      if (home && !onlyAll && (slug !== home.slug || !inTopic(d, c, home.topic, home.words))) continue;
       const w = await wordsFor(slug, c), segs = (w.segments || []).filter((x) => x && x[1]);
       let score = hits(c.title) * 3 + hits(c.summary) * 2; const keep = new Set();
       segs.forEach(([, x], i) => { const h = hits(x); if (h) { score += h; for (let j = i - 2; j <= i + 4; j++) keep.add(j); } });
@@ -1722,7 +1754,12 @@ async function spListen(req, body) {
       blocks.push({ score, text: `## ${key}: ${refs[key].title} (${refs[key].space}, ${refs[key].date})${file ? " has recording" : " no recording"}\nSummary: ${String(c.summary || "").slice(0, 500)}\n${idx.map((i) => `[${key}@${Math.round(segs[i][0])}] ${String(segs[i][1]).slice(0, 400)}`).join("\n")}` });
     }
   }
+  // The subspace has nothing recorded on it yet: look across every space instead, keeping it as home.
+  if (home && !onlyAll && !blocks.some((b) => /has recording/.test(b.text))) { onlyAll = true; blocks.length = 0; for (const x of Object.keys(refs)) delete refs[x]; k = 0; continue; }
+  break;
+  }
   if (!blocks.some((b) => /has recording/.test(b.text))) return [200, { none: true, q, title: q, parts: [] }];
+  const homeKey = home ? home.key : "";
   blocks.sort((a, b) => b.score - a.score);
   let ctx = ""; for (const b of blocks) { if (ctx.length + b.text.length > 90000) continue; ctx += b.text + "\n\n"; }
   const out = await chat({ messages: [{ role: "system", content: LISTEN_SYS }, { role: "user", content: `Listen for: ${q}\n\n${ctx}` }] }, 3500);
@@ -1752,7 +1789,33 @@ async function spListen(req, body) {
     if (x.kind !== "say") return;
     try { const f = admin.storage().bucket().file(`onebutton/podcasts/listen/${id}/${n}.wav`); await f.save(await voice(x.text), { contentType: "audio/wav", resumable: false }); x.file = f.name; } catch {}
   }));
-  const episode = { id, q, title: String(ep.title || q).slice(0, 120), ideas, parts, at: Date.now() };
+  if (!home) {
+    const clipsUsed = parts.filter((x) => x.kind === "clip"), count = {};
+    for (const c of clipsUsed) { const r = refs[c.key]; count[r.slug] = (count[r.slug] || 0) + 1; }
+    const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+    if (best) {
+      const slug = best[0], name = q.replace(/^\s*(?:the\s+)?(?:key\s+ideas?\s+)?(?:around|about|on)\s+/i, "").replace(/\b\w/g, (m) => m.toUpperCase()).slice(0, 60);
+      const topic = pidOf(name).slice(0, 34), mine = [...new Set(clipsUsed.filter((c) => refs[c.key].slug === slug).map((c) => refs[c.key].conv))];
+      await admin.firestore().runTransaction(async (tx) => {
+        const x = await tx.get(spaceRef(slug)), a = { ...ADDED, ...(x.data().added || {}) };
+        const known = [...(((a.synth || {}).topics) || []), ...(a.topics || [])];
+        if (!known.some((k2) => k2.slug === topic)) a.topics = [...(a.topics || []), { slug: topic, name, about: "Made while listening to key ideas around " + q + ".", words: qw, custom: true, at: Date.now() }];
+        const ct = { ...(a.convTopics || {}) }; for (const c of mine) ct[c] = [...new Set([...(ct[c] || []), topic])];
+        a.convTopics = ct;
+        tx.set(spaceRef(slug), { added: a, updated: Date.now() }, { merge: true });
+      });
+      const others = []; const seen = new Set();
+      for (const c of clipsUsed) { const r = refs[c.key]; if (r.slug === slug || seen.has(r.slug + "/" + r.conv)) continue; seen.add(r.slug + "/" + r.conv); others.push({ slug: r.slug, conv: r.conv, title: r.title, space: r.space }); }
+      home = { slug, topic, name, space: (docs.find((x) => x.id === slug).data().name) || slug, created: true, others };
+    }
+  } else {
+    // Conversations from other spaces that fed this session, offered to the subspace.
+    const others = []; const seen = new Set();
+    for (const c of parts.filter((x) => x.kind === "clip")) { const r = refs[c.key]; if (r.slug === home.slug || seen.has(r.slug + "/" + r.conv)) continue; seen.add(r.slug + "/" + r.conv); others.push({ slug: r.slug, conv: r.conv, title: r.title, space: r.space }); }
+    home = { ...home, others };
+  }
+  if (home) { delete home.words; delete home.key; delete home.score; }
+  const episode = { id, q, title: String(ep.title || q).slice(0, 120), ideas, parts, at: Date.now(), home: home || null, homeKey };
   await listenCol().doc(id).set(episode);
   return [200, withSrc(episode)];
 }
